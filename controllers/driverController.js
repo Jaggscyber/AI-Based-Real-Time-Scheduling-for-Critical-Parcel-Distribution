@@ -1,10 +1,47 @@
 // controllers/driverController.js
 const Driver = require('../models/driverModel');
 
-// ... (keep createDriver and getAllDrivers functions as they are) ...
+/**
+ * @desc    Create a new driver
+ * @route   POST /api/drivers
+ */
+exports.createDriver = async (req, res) => {
+  try {
+    const { name, isAvailable } = req.body;
 
-exports.createDriver = async (req, res) => { /* ... no changes ... */ };
-exports.getAllDrivers = async (req, res) => { /* ... no changes ... */ };
+    if (!name) {
+      return res.status(400).json({ msg: 'Please provide a driver name' });
+    }
+
+    const newDriver = new Driver({
+      name,
+      isAvailable,
+    });
+
+    const driver = await newDriver.save();
+    res.status(201).json(driver);
+
+  } catch (err) {
+    console.error('ERROR in createDriver:', err.message);
+    res.status(500).send('Server Error');
+  }
+};
+
+/**
+ * @desc    Get all drivers
+ * @route   GET /api/drivers
+ */
+exports.getAllDrivers = async (req, res) => {
+  try {
+    const drivers = await Driver.find();
+    res.status(200).json(drivers);
+
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
+};
+
 
 /**
  * @desc    Update a driver's location
