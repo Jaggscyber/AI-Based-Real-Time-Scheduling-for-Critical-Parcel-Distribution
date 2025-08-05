@@ -1,0 +1,84 @@
+/* src/DriverDashboard.css */
+.driver-dashboard {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 1rem;
+  background-color: #f9f9f9;
+}
+
+.driver-header {
+  text-align: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #eee;
+}
+
+.driver-header h1 {
+  margin: 0;
+}
+
+.stops-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.stop-card {
+  background-color: #fff;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+  border-left: 5px solid #ccc;
+  transition: transform 0.2s ease;
+}
+
+.stop-card:hover {
+    transform: translateY(-3px);
+}
+
+.stop-card.status-assigned { border-left-color: #f0ad4e; }
+.stop-card.status-in_transit { border-left-color: #0275d8; }
+.stop-card.status-delivered { border-left-color: #5cb85c; }
+
+
+.stop-card h3 {
+  margin-top: 0;
+}
+
+.stop-card p {
+  margin: 0.5rem 0;
+}
+
+.actions button {
+  border: none;
+  padding: 10px 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+  background-color: #0275d8;
+  color: white;
+  transition: background-color 0.2s;
+}
+
+.actions button:hover {
+  background-color: #025aa5;
+}
+
+.actions button.delivered {
+  background-color: #5cb85c;
+}
+.actions button.delivered:hover {
+  background-color: #4a934a;
+}
+
+.completed-text {
+    color: #5cb85c;
+    font-weight: bold;
+}
+
+.loading, .error, .no-route {
+    text-align: center;
+    font-size: 1.2rem;
+    padding: 3rem;
+    color: #666;
+}
