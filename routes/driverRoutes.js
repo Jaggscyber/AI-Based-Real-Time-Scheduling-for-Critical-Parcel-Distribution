@@ -1,14 +1,16 @@
-// routes/driverRoutes.js
 const express = require('express');
 const router = express.Router();
-const { createDriver, getAllDrivers, updateDriverLocation } = require('../controllers/driverController');
+const { 
+    getAllDrivers, 
+    updateDriverLocation, 
+    getDriverDetails 
+} = require('../controllers/driverController');
 
-// Existing routes for getting all drivers and creating a new one
 router.route('/')
-  .get(getAllDrivers)
-  .post(createDriver);
+  .get(getAllDrivers);
 
-// New route to update a specific driver's location
 router.put('/:driverId/location', updateDriverLocation);
+
+router.get('/:driverId/details', getDriverDetails);
 
 module.exports = router;

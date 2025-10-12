@@ -12,7 +12,8 @@ const connectDB = require('./config/db');
 const deliveryRoutes = require('./routes/deliveryRoutes');
 const driverRoutes = require('./routes/driverRoutes');
 const scheduleRoutes = require('./routes/scheduleRoutes');
-const routesRoutes = require('./routes/routesRoutes'); // 1. Make sure this line is here
+const routesRoutes = require('./routes/routesRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes'); 
 
 const app = express();
 const server = http.createServer(app);
@@ -20,8 +21,8 @@ const server = http.createServer(app);
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST"]
+    origin: "http://localhost:3000", // Your frontend URL
+    methods: ["GET", "POST", "PUT"]
   }
 });
 
@@ -29,7 +30,7 @@ const io = new Server(server, {
 connectDB();
 
 // Middlewares
-app.set('socketio', io);
+app.set('socketio', io); // Make io accessible in controllers
 app.use(cors());
 app.use(express.json());
 
@@ -37,7 +38,8 @@ app.use(express.json());
 app.use('/api/deliveries', deliveryRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/schedule', scheduleRoutes);
-app.use('/api/routes', routesRoutes); // 2. THIS IS THE CRUCIAL LINE TO ADD
+app.use('/api/routes', routesRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Socket.IO connection handler
 io.on('connection', (socket) => {

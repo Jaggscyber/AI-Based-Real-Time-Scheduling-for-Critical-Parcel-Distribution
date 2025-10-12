@@ -1,9 +1,9 @@
-// routes/routesRoutes.js
 const express = require('express');
 const router = express.Router();
-const { getDriverRoute } = require('../controllers/routesController');
+const { getDriverRoute, getAllRoutes, addStopToRoute } = require('../controllers/routesController');
 
-// Get the active route for a specific driver
+router.get('/', getAllRoutes);
 router.get('/:driverId', getDriverRoute);
+router.post('/add-stop', addStopToRoute);
 
 module.exports = router;
