@@ -2,118 +2,50 @@ const Driver = require('../models/driverModel');
 const Delivery = require('../models/deliveryModel');
 const Route = require('../models/routeModel');
 
-// A central constant for the warehouse location
-const WAREHOUSE_LOCATION = {
-    type: 'Point',
-    coordinates: [80.2707, 13.0827] // [longitude, latitude] for Chennai
-};
+const WAREHOUSE_LOCATION = { type: 'Point', coordinates: [80.2707, 13.0827] };
 
-/**
- * @desc    Create a new driver and handle duplicates
- * @route   POST /api/drivers
- */
-exports.createDriver = async (req, res) => {
-  try {
-    const { name, vehicleCapacity } = req.body;
-
-    if (!name) {
-      return res.status(400).json({ msg: 'Please provide a driver name' });
-    }
-
-    // This logic prevents the app from crashing on duplicate names
-    const existingDriver = await Driver.findOne({ name });
-    if (existingDriver) {
-        return res.status(400).json({ msg: 'A driver with this name already exists.' });
-    }
-
-    const newDriver = new Driver({
-      name,
-      vehicleCapacity,
-      isAvailable: true,
-      currentLocation: WAREHOUSE_LOCATION // New drivers start at the warehouse
-    });
-
-    const driver = await newDriver.save();
-    res.status(201).json(driver);
-
-  } catch (err) {
-    // This is a fallback for the unique constraint in the model
-    if (err.code === 11000) {
-        return res.status(400).json({ msg: 'A driver with this name already exists.' });
-    }
-    console.error('ERROR in createDriver:', err.message);
-    res.status(500).send('Server Error');
-  }
-};
-
-/**
- * @desc    Get all drivers
- * @route   GET /api/drivers
- */
 exports.getAllDrivers = async (req, res) => {
-  try {
-    const drivers = await Driver.find();
-    res.status(200).json(drivers);
-  } catch (err) {
-    console.error('Error in getAllDrivers:', err.message);
-    res.status(500).send('Server Error');
-  }
+    try {
+        let drivers = await Driver.find({ name: { $exists: true, $ne: "" } }).lean();
+        drivers.forEach(driver => {
+            if (!driver.currentLocation || !driver.currentLocation.coordinates) {
+                driver.currentLocation = WAREHOUSE_LOCATION;
+            }
+        });
+        res.status(200).json(drivers);
+    } catch (err) {
+        console.error('Error in getAllDrivers:', err.message);
+        res.status(500).send('Server Error');
+    }
 };
 
-/**
- * @desc    Update a driver's real-time location
- * @route   PUT /api/drivers/:driverId/location
- */
-exports.updateDriverLocation = async (req, res) => {
-  try {
-    const { coordinates } = req.body;
-    const io = req.app.get('socketio');
-
-    if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
-      return res.status(400).json({ msg: 'Please provide valid coordinates [longitude, latitude]' });
-    }
-
-    const updatedDriver = await Driver.findByIdAndUpdate(
-      req.params.driverId,
-      {
-        currentLocation: { type: 'Point', coordinates: coordinates }
-      },
-      { new: true }
-    );
-
-    if (!updatedDriver) {
-      return res.status(404).json({ msg: 'Driver not found' });
-    }
-
-    io.emit('driverLocationUpdated', updatedDriver); // Notify frontend of the move
-    res.status(200).json(updatedDriver);
-  } catch (err) {
-    console.error('Error in updateDriverLocation:', err.message);
-    res.status(500).send('Server Error');
-  }
-};
-
-/**
- * @desc    Get details for a driver, their active route, and history
- * @route   GET /api/drivers/:driverId/details
- */
 exports.getDriverDetails = async (req, res) => {
     try {
-        const driver = await Driver.findById(req.params.driverId);
-        if (!driver) {
-            return res.status(404).json({ msg: 'Driver not found' });
+        const { driverId } = req.params;
+        const driver = await Driver.findById(driverId);
+        if (!driver) { 
+            return res.status(404).json({ msg: 'Driver not found' }); 
+        }
+        
+        // THIS IS THE FIX: The query now finds any route that is not yet 'completed'.
+        const activeRoute = await Route.findOne({ 
+            driver: driverId, 
+            status: { $ne: 'completed' } 
+        }).populate('stops');
+        
+        const deliveryStatusCounts = { assigned: 0, in_transit: 0, delivered: 0 };
+        if (activeRoute) {
+            activeRoute.stops.forEach(stop => {
+                if (deliveryStatusCounts.hasOwnProperty(stop.status)) {
+                    deliveryStatusCounts[stop.status]++;
+                }
+            });
         }
 
-        const activeRoute = await Route.findOne({ driver: req.params.driverId, status: { $ne: 'completed' } })
-            .populate({ path: 'stops', model: 'Delivery' });
-
-        const deliveryHistory = await Delivery.find({ assignedDriver: req.params.driverId, status: 'delivered' });
-
-        res.status(200).json({
-            driver,
+        res.status(200).json({ 
+            driver, 
             activeRoute,
-            deliveryHistory,
-            deliveriesCompleted: deliveryHistory.length
+            deliveryStatusCounts
         });
     } catch (err) {
         console.error('Error in getDriverDetails:', err.message);
@@ -121,31 +53,28 @@ exports.getDriverDetails = async (req, res) => {
     }
 };
 
-/**
- * @desc    Resets a driver to be available for a new schedule
- * @route   PUT /api/drivers/:driverId/reset
- */
-exports.resetDriverStatus = async (req, res) => {
+exports.returnToWarehouse = async (req, res) => {
     try {
-        const driver = await Driver.findByIdAndUpdate(
-            req.params.driverId,
-            {
-                isAvailable: true,
-                currentLocation: WAREHOUSE_LOCATION
-            },
-            { new: true }
-        );
-
-        if (!driver) {
-            return res.status(404).json({ msg: 'Driver not found' });
-        }
-
+        const { driverId } = req.params;
+        const driver = await Driver.findByIdAndUpdate(driverId, { isAvailable: true, currentLocation: WAREHOUSE_LOCATION }, { new: true });
         const io = req.app.get('socketio');
-        io.emit('driverLocationUpdated', driver); // Notify frontend of the status change
-        res.status(200).json({ msg: 'Driver status has been reset.', driver });
+        io.emit('driverLocationUpdated', driver);
+        res.status(200).json(driver);
     } catch (err) {
-        console.error('Error resetting driver status:', err.message);
         res.status(500).send('Server Error');
     }
 };
 
+exports.resetAllDrivers = async (req, res) => {
+    try {
+        await Driver.updateMany({}, { isAvailable: true, currentLocation: WAREHOUSE_LOCATION });
+        await Route.updateMany({ status: { $ne: 'completed' } }, { status: 'completed' });
+        await Delivery.updateMany({ status: { $in: ['assigned', 'in_transit'] } }, { status: 'pending', assignedDriver: null });
+        
+        const io = req.app.get('socketio');
+        io.emit('scheduleUpdated', { message: 'All drivers and routes have been reset.' });
+        res.status(200).json({ msg: 'All drivers have been reset to available.' });
+    } catch (err) {
+        res.status(500).send('Server Error');
+    }
+};

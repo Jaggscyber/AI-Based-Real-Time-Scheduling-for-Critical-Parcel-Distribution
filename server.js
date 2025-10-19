@@ -1,4 +1,5 @@
-// server.js
+// backend/server.js
+
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
@@ -13,7 +14,7 @@ const deliveryRoutes = require('./routes/deliveryRoutes');
 const driverRoutes = require('./routes/driverRoutes');
 const scheduleRoutes = require('./routes/scheduleRoutes');
 const routesRoutes = require('./routes/routesRoutes');
-const dashboardRoutes = require('./routes/dashboardRoutes'); 
+const dashboardRoutes = require('./routes/dashboardRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -29,9 +30,14 @@ const io = new Server(server, {
 // Connect to Database
 connectDB();
 
-// Middlewares
+// --- Middlewares ---
+
+// THIS IS THE CORRECTED LINE: Configure CORS for all Express API routes
+app.use(cors({
+  origin: "http://localhost:3000"
+}));
+
 app.set('socketio', io); // Make io accessible in controllers
-app.use(cors());
 app.use(express.json());
 
 // API Routes
@@ -47,6 +53,24 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
+  });
+
+  // Listen for driver location updates from the driver dashboard
+  socket.on('updateDriverLocation', async (data) => {
+    try {
+      const { driverId, location } = data;
+      const driver = await Driver.findByIdAndUpdate(
+        driverId,
+        { currentLocation: location },
+        { new: true }
+      );
+      if (driver) {
+        // Broadcast the updated location to all connected clients (i.e., the admin dashboard)
+        io.emit('driverLocationUpdated', driver);
+      }
+    } catch (error) {
+      console.error('Error updating driver location from socket:', error);
+    }
   });
 });
 

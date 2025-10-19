@@ -1,11 +1,17 @@
 const express = require('express');
 const router = express.Router();
-const { createDelivery, getAllDeliveries, updateDeliveryStatus } = require('../controllers/deliveryController');
+const {
+    createDelivery,
+    getAllDeliveries,
+    updateDeliveryStatus,
+    getDeliveryHistory, // <-- Added
+    deleteDelivery
+} = require('../controllers/deliveryController');
 
-router.route('/')
-  .post(createDelivery)
-  .get(getAllDeliveries);
-
+router.post('/', createDelivery);
+router.get('/', getAllDeliveries);
 router.put('/:deliveryId/status', updateDeliveryStatus);
+router.delete('/:deliveryId', deleteDelivery);
+router.get('/history', getDeliveryHistory); // <-- Added
 
 module.exports = router;

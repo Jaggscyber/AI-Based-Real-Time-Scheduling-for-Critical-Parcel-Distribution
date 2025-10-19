@@ -1,18 +1,13 @@
 const mongoose = require('mongoose');
 const Route = require('../models/routeModel');
-const Driver = require('../models/driverModel'); // <-- Import Driver model
+const Driver = require('../models/driverModel');
+const Delivery = require('../models/deliveryModel');
+const { calculateOptimizedRoute } = require('../utils/routeOptimizer');
 
-/**
- * @desc    Get the active route for a driver, or just their details if no route is active.
- * @route   GET /api/routes/:driverId
- */
+const WAREHOUSE_COORDS = { type: 'Point', coordinates: [80.2707, 13.0827] };
+
 exports.getDriverRoute = async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.driverId)) {
-      return res.status(400).json({ msg: 'Invalid Driver ID format.' });
-    }
-
-    // First, try to find an active route
     let route = await Route.findOne({
       driver: req.params.driverId,
       status: { $ne: 'completed' }
@@ -20,26 +15,14 @@ exports.getDriverRoute = async (req, res) => {
     .populate('driver', 'name currentLocation')
     .populate({ path: 'stops', model: 'Delivery' });
 
-    // --- FIX: If no active route is found, return driver details with an empty route ---
     if (!route) {
         const driver = await Driver.findById(req.params.driverId).select('name currentLocation');
         if (!driver) {
-            // Only send 404 if the driver truly doesn't exist
             return res.status(404).json({ msg: 'Driver not found.' });
         }
-        // If driver exists but has no active route, send a successful response
-        return res.status(200).json({
-            driver: driver,
-            stops: [], // Empty stops array
-            status: 'inactive',
-            polyline: null,
-            totalDistance: 'N/A',
-            totalDuration: 'N/A',
-            legs: []
-        });
+        // If no route, return a default inactive structure
+        return res.status(200).json({ driver: driver, stops: [], status: 'inactive' });
     }
-    // --- END OF FIX ---
-
     res.status(200).json(route);
   } catch (error) {
     console.error('Error fetching driver route:', error.message);
@@ -47,10 +30,6 @@ exports.getDriverRoute = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get all active routes for the admin dashboard
- * @route   GET /api/routes
- */
 exports.getAllRoutes = async (req, res) => {
   try {
     const routes = await Route.find({ status: { $ne: 'completed' } })
@@ -63,46 +42,91 @@ exports.getAllRoutes = async (req, res) => {
   }
 };
 
-/**
- * @desc    Dynamically add a stop to an existing route
- * @route   POST /api/routes/add-stop
- */
 exports.addStopToRoute = async (req, res) => {
     const { driverId, deliveryId } = req.body;
     try {
-        if (!mongoose.Types.ObjectId.isValid(driverId) || !mongoose.Types.ObjectId.isValid(deliveryId)) {
-            return res.status(400).json({ msg: 'Invalid ID format provided.' });
-        }
-        let route = await Route.findOne({ driver: driverId, status: { $in: ['pending', 'in_progress'] } });
+        const driver = await Driver.findById(driverId);
+        if (!driver) { return res.status(404).json({ msg: 'Driver not found.' }); }
+
         const delivery = await Delivery.findById(deliveryId);
-
         if (!delivery || delivery.status !== 'pending') {
-            return res.status(400).json({ msg: 'This delivery is not pending and cannot be assigned.' });
+            return res.status(400).json({ msg: 'This delivery is not pending.' });
         }
 
+        let route = await Route.findOne({ driver: driverId, status: { $ne: 'completed' } });
         if (route) {
             route.stops.push(deliveryId);
-            await route.save();
         } else {
-            route = new Route({
-                driver: driverId,
-                stops: [deliveryId],
-                status: 'pending',
-            });
-            await route.save();
+            route = new Route({ driver: driverId, stops: [deliveryId], status: 'assigned' });
         }
+        await route.save();
 
+        driver.isAvailable = false;
+        await driver.save();
+        
         delivery.status = 'assigned';
         delivery.assignedDriver = driverId;
         await delivery.save();
         
         const io = req.app.get('socketio');
-        io.emit('scheduleUpdated', { message: `New delivery assigned to driver ${driverId}` });
-
+        io.emit('scheduleUpdated', { message: `New delivery assigned to driver ${driver.name}` });
         res.status(200).json(route);
     } catch (err) {
-        console.error('Error adding stop to route:', err.message);
         res.status(500).send('Server Error');
     }
 };
 
+exports.recalculateRoute = async (req, res) => {
+    const { driverId, currentLocation } = req.body;
+    try {
+        const route = await Route.findOne({ driver: driverId, status: { $ne: 'completed' } }).populate('stops');
+        
+        // This case handles a driver finishing their last delivery and needing a route to the warehouse
+        if (!route && currentLocation) {
+            const waypoints = [`${currentLocation.lng},${currentLocation.lat}`, WAREHOUSE_COORDS.coordinates.join(',')];
+            const optimizationResult = await calculateOptimizedRoute(waypoints);
+            return res.status(200).json({ polyline: optimizationResult.polyline });
+        }
+
+        if (!route) {
+            return res.status(404).json({ msg: 'Active route not found for this driver.' });
+        }
+
+        const remainingStops = route.stops.filter(stop => stop.status !== 'delivered');
+        
+        // This case handles the final delivery and generates the route to the warehouse
+        if (remainingStops.length === 0) {
+            const startPoint = currentLocation ? `${currentLocation.lng},${currentLocation.lat}` : WAREHOUSE_COORDS.coordinates.join(',');
+            const waypoints = [startPoint, WAREHOUSE_COORDS.coordinates.join(',')];
+            const optimizationResult = await calculateOptimizedRoute(waypoints);
+            if (optimizationResult) {
+                route.polyline = optimizationResult.polyline;
+                await route.save();
+            }
+            return res.status(200).json(route);
+        }
+        
+        // This case handles normal mid-route recalculations
+        const startPoint = currentLocation ? `${currentLocation.lng},${currentLocation.lat}` : WAREHOUSE_COORDS.coordinates.join(',');
+        const waypoints = [startPoint, ...remainingStops.map(stop => stop.pickupLocation.coordinates.join(','))];
+        const optimizationResult = await calculateOptimizedRoute(waypoints);
+
+        if (!optimizationResult) {
+            return res.status(500).json({ msg: 'Failed to recalculate route.' });
+        }
+        
+        route.polyline = optimizationResult.polyline;
+        route.totalDistance = optimizationResult.totalDistance;
+        route.totalDuration = optimizationResult.totalDuration;
+        route.legs = optimizationResult.legs;
+        await route.save();
+        
+        const finalRoute = await Route.findById(route._id).populate('driver', 'name currentLocation').populate({ path: 'stops', model: 'Delivery' });
+        res.status(200).json(finalRoute);
+
+    } catch (error) {
+        console.error('Error recalculating route:', error.message);
+        res.status(500).send('Server Error');
+    }
+};
+// The extra brace that was here has been removed

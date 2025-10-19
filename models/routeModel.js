@@ -19,7 +19,8 @@ const RouteSchema = new mongoose.Schema({
   }],
   status: {
     type: String,
-    enum: ['pending', 'in_progress', 'completed'],
+    // CORRECTED ENUM to include all statuses used in the app
+    enum: ['pending', 'assigned', 'in_progress', 'completed'], 
     default: 'pending',
   },
   polyline: String,

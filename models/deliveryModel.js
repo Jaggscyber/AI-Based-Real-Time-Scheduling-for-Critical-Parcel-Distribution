@@ -1,14 +1,10 @@
 const mongoose = require('mongoose');
 
-const StatusHistorySchema = new mongoose.Schema({
-    status: { type: String, required: true },
-    timestamp: { type: Date, default: Date.now }
-}, { _id: false });
-
 const DeliverySchema = new mongoose.Schema({
+  // Existing fields
   pickupLocation: {
     type: { type: String, enum: ['Point'], required: true },
-    coordinates: { type: [Number], required: true }
+    coordinates: { type: [Number], required: true } // [longitude, latitude]
   },
   dropoffLocation: {
     type: { type: String, enum: ['Point'], required: true },
@@ -16,26 +12,28 @@ const DeliverySchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'assigned', 'in_transit', 'delivered', 'failed'],
+    enum: ['pending', 'assigned', 'in_transit', 'delivered', 'failed', 'archived'],
     default: 'pending'
   },
-  assignedDriver: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Driver', 
-    default: null 
+  assignedDriver: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Driver'
   },
-  size: {
-    type: Number,
-    default: 1
+  statusHistory: [{
+    status: String,
+    timestamp: Date
+  }],
+  
+  // New/Updated fields for history tracking
+  createdAt: {
+    type: Date,
+    default: Date.now
   },
-  statusHistory: [StatusHistorySchema]
-}, { timestamps: true });
-
-DeliverySchema.pre('save', function(next) {
-    if (this.isNew) {
-        this.statusHistory.push({ status: 'pending' });
-    }
-    next();
+  completedAt: {
+    type: Date
+  }
 });
+
+DeliverySchema.index({ pickupLocation: '2dsphere' });
 
 module.exports = mongoose.model('Delivery', DeliverySchema);
