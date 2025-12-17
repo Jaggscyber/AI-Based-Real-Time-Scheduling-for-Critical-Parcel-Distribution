@@ -1,80 +1,42 @@
-// backend/server.js
-
 const express = require('express');
+const mongoose = require('mongoose');
 const cors = require('cors');
-require('dotenv').config();
 const http = require('http');
-const { Server } = require("socket.io");
-
-// Import DB connection
-const connectDB = require('./config/db');
-
-// Import Route Files
-const deliveryRoutes = require('./routes/deliveryRoutes');
-const driverRoutes = require('./routes/driverRoutes');
-const scheduleRoutes = require('./routes/scheduleRoutes');
-const routesRoutes = require('./routes/routesRoutes');
-const dashboardRoutes = require('./routes/dashboardRoutes');
+const { Server } = require('socket.io');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Socket.IO
-const io = new Server(server, {
-  cors: {
-    origin: "http://localhost:3000", // Your frontend URL
-    methods: ["GET", "POST", "PUT"]
-  }
-});
-
-// Connect to Database
-connectDB();
-
-// --- Middlewares ---
-
-// THIS IS THE CORRECTED LINE: Configure CORS for all Express API routes
-app.use(cors({
-  origin: "http://localhost:3000"
+// --- 1. MIDDLEWARE ---
+app.use(cors({ 
+    origin: "http://localhost:3000", 
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true 
 }));
-
-app.set('socketio', io); // Make io accessible in controllers
 app.use(express.json());
 
-// API Routes
-app.use('/api/deliveries', deliveryRoutes);
-app.use('/api/drivers', driverRoutes);
-app.use('/api/schedule', scheduleRoutes);
-app.use('/api/routes', routesRoutes);
-app.use('/api/dashboard', dashboardRoutes);
+// --- 2. DATABASE ---
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/parcel_distribution_ai';
+mongoose.connect(MONGO_URI)
+    .then(() => console.log('✅ MongoDB Connected'))
+    .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
-// Socket.IO connection handler
-io.on('connection', (socket) => {
-  console.log('A user connected:', socket.id);
-
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-  });
-
-  // Listen for driver location updates from the driver dashboard
-  socket.on('updateDriverLocation', async (data) => {
-    try {
-      const { driverId, location } = data;
-      const driver = await Driver.findByIdAndUpdate(
-        driverId,
-        { currentLocation: location },
-        { new: true }
-      );
-      if (driver) {
-        // Broadcast the updated location to all connected clients (i.e., the admin dashboard)
-        io.emit('driverLocationUpdated', driver);
-      }
-    } catch (error) {
-      console.error('Error updating driver location from socket:', error);
-    }
-  });
+// --- 3. SOCKET.IO ---
+const io = new Server(server, {
+    cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] }
 });
+app.set('socketio', io);
 
-const PORT = process.env.PORT || 5001;
+// --- 4. ROUTES ---
+// ✅ ALL ROUTES ARE NOW ACTIVE
+app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/drivers', require('./routes/driverRoutes'));
+app.use('/api/deliveries', require('./routes/deliveryRoutes'));
+app.use('/api/routes', require('./routes/routesRoutes')); // <-- UNCOMMENTED THIS
+app.use('/api/schedule', require('./routes/scheduleRoutes'));
+app.use('/api/dashboard', require('./routes/dashboardRoutes'));
 
-// Start the server
-server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+// --- 5. START SERVER ---
+const PORT = 5000; // Matches your AdminDashboard.js
+server.listen(PORT, () => console.log(`🚀 Node Server running on port ${PORT}`));

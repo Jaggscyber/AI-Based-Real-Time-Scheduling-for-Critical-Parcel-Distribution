@@ -1,9 +1,8 @@
 const Delivery = require('../models/deliveryModel');
 const Route = require('../models/routeModel');
 const Driver = require('../models/driverModel');
-const { recalculateRouteForDriver } = require('../utils/routeOptimizer');
 
-// Gets only ACTIVE deliveries for the main dashboard view
+// GET: Active deliveries
 exports.getAllDeliveries = async (req, res) => {
     try {
         const deliveries = await Delivery.find({ 
@@ -11,124 +10,193 @@ exports.getAllDeliveries = async (req, res) => {
         }).populate('assignedDriver', 'name');
         res.status(200).json(deliveries);
     } catch (err){
+        console.error(err);
         res.status(500).send('Server Error');
     }
 };
 
-// Gets completed/failed deliveries for the history table
+// GET: History
 exports.getDeliveryHistory = async (req, res) => {
     try {
-        const history = await Delivery.find({ status: { $in: ['delivered', 'failed'] } })
-            .sort({ completedAt: -1 })
+        const history = await Delivery.find({}) 
+            .sort({ createdAt: -1 })
             .populate('assignedDriver', 'name');
         res.status(200).json(history);
     } catch (err) {
+        console.error(err);
         res.status(500).send('Server Error');
     }
 };
 
+// POST: Create
 exports.createDelivery = async (req, res) => {
     try {
-        const { pickupLocation } = req.body;
-        const newDelivery = new Delivery({ pickupLocation, dropoffLocation: pickupLocation });
+        // Destructure all expected fields
+        const { 
+            pickupLocation, 
+            customerName, 
+            customerPhone, 
+            zone, 
+            fullAddress, 
+            items, 
+            cost, 
+            weight,    // <--- Added
+            deadline   // <--- Added
+        } = req.body;
+        
+        // Basic Validation
+        if (!pickupLocation || !customerName || !customerPhone) {
+            return res.status(400).json({ msg: 'Missing required fields: Name, Phone, or Location.' });
+        }
+
+        const newDelivery = new Delivery({ 
+            pickupLocation, 
+            dropoffLocation: pickupLocation, // Defaulting dropoff to pickup for map demo
+            customerName,
+            customerPhone,
+            fullAddress: fullAddress || 'N/A',
+            zone: zone || 'Unzoned',
+            items: items || [],
+            cost: cost || 0,
+            weight: weight || 5,      // Default 5kg
+            deadline: deadline || 480 // Default 8 hours
+        });
+
         await newDelivery.save();
+
         const io = req.app.get('socketio');
-        io.emit('scheduleUpdated', { message: 'New delivery created.' });
+        if(io) io.emit('scheduleUpdated', { message: `New delivery for ${customerName}.` });
+        
         res.status(201).json(newDelivery);
     } catch (err) {
+        console.error('Create Delivery Error:', err.message);
         res.status(500).send('Server Error');
     }
 };
 
+// PUT: Update Status
 exports.updateDeliveryStatus = async (req, res) => {
   try {
     const { status } = req.body;
     const { deliveryId } = req.params;
-    const delivery = await Delivery.findById(deliveryId);
-    if (!delivery) { return res.status(404).json({ msg: 'Delivery not found' }); }
 
+    const delivery = await Delivery.findById(deliveryId);
+    if (!delivery) return res.status(404).json({ msg: 'Delivery not found' });
+
+    // UPDATE FIELDS
     delivery.status = status;
     delivery.statusHistory.push({ status, timestamp: new Date() });
-    if (status === 'delivered' || status === 'failed') { delivery.completedAt = new Date(); }
+    
+    if (['delivered', 'failed'].includes(status)) { 
+        delivery.completedAt = new Date(); 
+    }
+    
+    // CRITICAL FIX: If old data is missing required fields, fill them with placeholders
+    // This prevents "Validation Error" on old test data
+    if (!delivery.customerName) delivery.customerName = "Unknown Customer";
+    if (!delivery.customerPhone) delivery.customerPhone = "000-000-0000";
+
     await delivery.save();
     
     const io = req.app.get('socketio');
-    
-    // THIS IS THE FIX: Convert the ID to a string before slicing it
-    const message = `Delivery ${delivery._id.toString().slice(-6)} status: ${status}.`;
-    io.emit('scheduleUpdated', { message });
 
+    // Update Driver Location if delivered (Optional Logic)
     if (status === 'delivered' && delivery.assignedDriver) {
-        const driver = await Driver.findByIdAndUpdate(delivery.assignedDriver, { currentLocation: delivery.pickupLocation }, { new: true });
-        if (driver) io.emit('driverLocationUpdated', driver);
-        await recalculateRouteForDriver(delivery.assignedDriver.toString());
+        const driver = await Driver.findByIdAndUpdate(
+            delivery.assignedDriver, 
+            { currentLocation: delivery.pickupLocation }, 
+            { new: true }
+        );
+        if (driver && io) io.emit('driverLocationUpdated', driver);
     }
+
+    if(io) io.emit('scheduleUpdated', { message: `Delivery updated: ${status}` });
     res.status(200).json(delivery);
   } catch (err) {
-    // This console.error will now correctly log the error without crashing
-    console.error('Error updating delivery status:', err.message);
-    res.status(500).send('Server Error');
+    console.error('Update Status Error:', err.message);
+    res.status(500).send('Server Error: ' + err.message);
   }
 };
+
+// PUT: Assign (Manual Assignment)
 exports.assignDelivery = async (req, res) => {
     try {
         const { deliveryId } = req.params;
         const { driverId } = req.body;
+        
         const delivery = await Delivery.findById(deliveryId);
         const driver = await Driver.findById(driverId);
-        if (!delivery || !driver) { return res.status(404).json({ msg: 'Delivery or Driver not found.' }); }
-        if (delivery.status !== 'pending') { return res.status(400).json({ msg: 'Delivery is not pending.' }); }
-        if (!driver.isAvailable) { return res.status(400).json({ msg: 'Driver is not available.' }); }
 
+        if (!delivery || !driver) return res.status(404).json({ msg: 'Not found.' });
+        
         delivery.status = 'assigned';
         delivery.assignedDriver = driverId;
+        
+        // Safety check for old data here too
+        if (!delivery.customerName) delivery.customerName = "Unknown";
+        if (!delivery.customerPhone) delivery.customerPhone = "000";
+
         await delivery.save();
+
         driver.isAvailable = false;
         await driver.save();
-        
+
+        // Add to route
         let route = await Route.findOne({ driver: driverId, status: { $ne: 'completed' } });
-        if (route) { route.stops.push(deliveryId); await route.save(); }
-        else { route = new Route({ driver: driverId, stops: [deliveryId], status: 'assigned' }); await route.save(); }
+        if (route) {
+            route.stops.push(deliveryId);
+            await route.save();
+        } else {
+            route = new Route({ driver: driverId, stops: [deliveryId], status: 'assigned' });
+            await route.save();
+        }
+
+        const io = req.app.get('socketio');
+        if(io) io.emit('scheduleUpdated', { message: `Delivery assigned to ${driver.name}.` });
         
-        await recalculateRouteForDriver(driverId);
-        const io = req.app.get('socketio');
-        io.emit('scheduleUpdated', { message: `Delivery assigned to ${driver.name}.` });
-        res.status(200).json({ msg: 'Delivery assigned successfully.' });
+        res.status(200).json({ msg: 'Assigned successfully.' });
     } catch (err) {
+        console.error(err);
         res.status(500).send('Server Error');
     }
 };
 
-exports.unassignDelivery = async (req, res) => {
-    try {
-        const { deliveryId } = req.params;
-        const delivery = await Delivery.findById(deliveryId);
-        if (!delivery || !delivery.assignedDriver) { return res.status(404).json({ msg: 'Assigned delivery not found.' }); }
-        const driverId = delivery.assignedDriver.toString();
-        delivery.status = 'pending';
-        delivery.assignedDriver = null;
-        await delivery.save();
-        await Route.updateOne({ driver: driverId }, { $pull: { stops: deliveryId } });
-        await recalculateRouteForDriver(driverId);
-        const io = req.app.get('socketio');
-        io.emit('scheduleUpdated', { message: `Delivery unassigned.` });
-        res.status(200).json({ msg: 'Delivery unassigned successfully.' });
-    } catch (err) {
-        res.status(500).send('Server Error');
-    }
-};
-
+// DELETE: Cascade Delete
 exports.deleteDelivery = async (req, res) => {
     try {
         const { deliveryId } = req.params;
         const delivery = await Delivery.findById(deliveryId);
+        
         if (!delivery) { return res.status(404).json({ msg: 'Delivery not found.' }); }
-        if (['assigned', 'in_transit'].includes(delivery.status)) { return res.status(400).json({ msg: 'Cannot delete an active delivery.' }); }
+        
+        // 1. If assigned, remove from Driver's Route first
+        if (delivery.assignedDriver) {
+            const driverId = delivery.assignedDriver;
+            const route = await Route.findOne({ driver: driverId, status: { $ne: 'completed' } });
+            
+            if (route) {
+                // Filter out this delivery ID from stops
+                route.stops = route.stops.filter(id => id.toString() !== deliveryId);
+                
+                // If route is empty after deletion, remove route and free driver
+                if (route.stops.length === 0) {
+                    await Route.findByIdAndDelete(route._id);
+                    await Driver.findByIdAndUpdate(driverId, { isAvailable: true });
+                } else {
+                    await route.save();
+                }
+            }
+        }
+
+        // 2. Delete the Delivery
         await delivery.deleteOne();
+        
         const io = req.app.get('socketio');
-        io.emit('scheduleUpdated', { message: `Delivery deleted.`});
+        if(io) io.emit('scheduleUpdated', { message: `Delivery deleted.`});
+        
         res.status(200).json({ msg: 'Delivery deleted successfully.' });
     } catch (err) {
+        console.error('Delete Error:', err.message);
         res.status(500).send('Server Error');
     }
 };

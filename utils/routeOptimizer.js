@@ -1,34 +1,61 @@
 const axios = require('axios');
+require('dotenv').config();
 
-// This is an EXAMPLE using the public OSRM server.
-// If you have a local OSRM instance or use Mapbox, change this URL.
-const OSRM_URL = "http://router.project-osrm.org";
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
+// This function takes a list of coordinates (Waypoints) and returns a Polyline (Blue line)
 exports.calculateOptimizedRoute = async (waypoints) => {
+    if (!waypoints || waypoints.length < 2) return null;
+
     try {
-        // Waypoints should be in 'longitude,latitude' format, joined by ';'
-        const coordinates = waypoints.join(';');
-        const url = `${OSRM_URL}/route/v1/driving/${coordinates}?overview=full&geometries=polyline&steps=true`;
+        // 1. Format coordinates for Google Maps API
+        // Input format is like ["13.08,80.27", "12.97,80.25", ...]
+        const origin = waypoints[0];
+        const destination = waypoints[waypoints.length - 1];
+        
+        // Google Maps expects intermediates joined by pipes "|"
+        const intermediates = waypoints.slice(1, -1).join('|');
 
-        const response = await axios.get(url);
-
-        if (response.data.routes && response.data.routes.length > 0) {
-            const route = response.data.routes[0];
-            return {
-                polyline: route.geometry, // The encoded polyline string
-                totalDistance: `${(route.distance / 1000).toFixed(2)} km`,
-                totalDuration: `${Math.round(route.duration / 60)} min`,
-                legs: route.legs.map(leg => ({
-                    distance: `${(leg.distance / 1000).toFixed(2)} km`,
-                    duration: `${Math.round(leg.duration / 60)} min`,
-                })),
-            };
+        let url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&key=${GOOGLE_MAPS_API_KEY}`;
+        
+        if (intermediates) {
+            url += `&waypoints=optimize:true|${intermediates}`;
         }
-        // Return null if the routing service finds no route
-        return null;
+
+        // 2. Call Google Maps
+        const response = await axios.get(url);
+        const data = response.data;
+
+        if (data.status === 'OK' && data.routes.length > 0) {
+            const route = data.routes[0];
+            const polyline = route.overview_polyline.points;
+            
+            // 3. Calculate Totals
+            let totalDistVal = 0;
+            let totalDurVal = 0;
+            route.legs.forEach(leg => {
+                totalDistVal += leg.distance.value;
+                totalDurVal += leg.duration.value;
+            });
+
+            // Convert meters/seconds to readable strings
+            const totalDistance = (totalDistVal / 1000).toFixed(1) + ' km';
+            const totalDuration = Math.round(totalDurVal / 60) + ' mins';
+            
+            const legs = route.legs.map(leg => ({
+                distance: leg.distance.text,
+                duration: leg.duration.text,
+                start_address: leg.start_address,
+                end_address: leg.end_address
+            }));
+
+            return { polyline, totalDistance, totalDuration, legs };
+        } else {
+            console.error('Google Maps Route Error:', data.status);
+            return null;
+        }
     } catch (error) {
-        // Log the detailed error from the routing service if it fails
-        console.error("Error in calculateOptimizedRoute:", error.response ? error.response.data : error.message);
-        throw new Error("Failed to calculate route from the routing service.");
+        console.error('Route Optimization Error:', error.message);
+        return null;
     }
 };

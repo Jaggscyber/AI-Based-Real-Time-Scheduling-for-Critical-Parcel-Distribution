@@ -6,5 +6,7 @@ router.get('/', getAllRoutes);
 router.get('/:driverId', getDriverRoute);
 router.post('/add-stop', addStopToRoute);
 router.post('/recalculate', recalculateRoute);
+router.get('/', getAllRoutes);
+
 
 module.exports = router;

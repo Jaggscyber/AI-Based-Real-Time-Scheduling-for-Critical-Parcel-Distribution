@@ -31,16 +31,20 @@ exports.getDriverRoute = async (req, res) => {
 };
 
 exports.getAllRoutes = async (req, res) => {
-  try {
-    const routes = await Route.find({ status: { $ne: 'completed' } })
-      .populate('driver', 'name currentLocation')
-      .populate('stops');
-    res.status(200).json(routes);
-  } catch (error) {
-    console.error('Error fetching all routes:', error.message);
-    res.status(500).send('Server Error');
-  }
+    try {
+        const routes = await Route.find({ status: { $ne: 'completed' } })
+            .populate('driver', 'name') // Get the driver's name
+            .populate('stops');         // Get full details for each delivery stop
+
+        res.status(200).json(routes);
+    } catch (err) {
+        console.error("Error fetching routes:", err.message);
+        res.status(500).send('Server Error');
+    }
 };
+
+
+
 
 exports.addStopToRoute = async (req, res) => {
     const { driverId, deliveryId } = req.body;
