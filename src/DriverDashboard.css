@@ -1,183 +1,182 @@
-/* frontend/src/DriverDashboard.css */
+/* DriverDashboard.css */
 
 .driver-dashboard {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background-color: #f4f7f6;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: #f0f2f5;
 }
 
 .driver-header {
     background-color: #2c3e50;
     color: white;
-    padding: 1rem 1.5rem;
-    text-align: center;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    z-index: 1000;
+    padding: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    z-index: 2000;
 }
 
 .driver-header h1 {
     margin: 0;
-    font-size: 1.5rem;
+    font-size: 1.2rem;
 }
 
-.route-summary {
-    display: flex;
-    justify-content: center;
-    gap: 2rem;
-    margin-top: 0.5rem;
+.driver-header .subtitle {
+    font-size: 0.8rem;
+    color: #bdc3c7;
+}
+
+.route-stats span {
+    margin-left: 15px;
+    font-weight: bold;
     font-size: 0.9rem;
-    opacity: 0.9;
 }
 
 .driver-main-content {
     display: flex;
     flex: 1;
-    overflow: hidden; /* Important for layout */
+    overflow: hidden;
 }
 
 .driver-map-container {
-    flex: 1;
-    position: relative; /* Needed for Leaflet */
+    flex: 2;
+    position: relative;
+}
+
+.recenter-btn {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+    background: white;
+    border: none;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    font-size: 24px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    cursor: pointer;
 }
 
 .driver-stops-panel {
-    width: 350px;
-    background-color: #ffffff;
-    border-left: 1px solid #e0e0e0;
+    flex: 1;
+    min-width: 350px;
+    max-width: 400px;
+    background: white;
+    border-left: 1px solid #ddd;
     display: flex;
     flex-direction: column;
-}
-
-.driver-stops-panel h2 {
-    margin: 0;
-    padding: 1rem;
-    font-size: 1.2rem;
-    background-color: #f9f9f9;
-    border-bottom: 1px solid #e0e0e0;
+    overflow-y: auto;
 }
 
 .stops-list {
-    overflow-y: auto;
-    flex: 1;
-    padding: 1rem;
+    padding: 15px;
 }
 
 .stop-card {
-    background-color: #fff;
-    border: 1px solid #ddd;
-    border-left: 5px solid #3498db; /* Blue for pending/assigned */
-    border-radius: 5px;
-    padding: 1rem;
-    margin-bottom: 1rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    transition: all 0.2s ease-in-out;
+    background: white;
+    border: 1px solid #e1e4e8;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    position: relative;
+    border-left: 4px solid #3498db;
 }
 
-.stop-card.in_transit {
-    border-left-color: #f39c12; /* Orange for in_transit */
+.stop-card.in_transit { border-left-color: #f39c12; background-color: #fffcf5; }
+.stop-card.delivered { border-left-color: #2ecc71; opacity: 0.6; }
+
+.stop-header {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
 }
 
-.stop-card.delivered {
-    border-left-color: #2ecc71; /* Green for delivered */
-    opacity: 0.8;
+.stop-number {
+    background: #34495e;
+    color: white;
+    width: 25px;
+    height: 25px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: bold;
 }
 
-.stop-card h3 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.1rem;
+.stop-info h4 { margin: 0; font-size: 1.1rem; color: #2c3e50; }
+.address { margin: 4px 0 0; color: #7f8c8d; font-size: 0.9rem; }
+
+.stop-details {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
 }
 
-.stop-card p {
-    margin: 0.25rem 0;
-    color: #555;
+.phone-link {
+    text-decoration: none;
+    color: #2980b9;
+    font-weight: 500;
+    font-size: 0.9rem;
+}
+
+.weight-tag {
+    background: #ecf0f1;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    color: #7f8c8d;
 }
 
 .stop-actions {
-    margin-top: 1rem;
+    display: flex;
+    gap: 10px;
 }
 
-.stop-actions button {
-    background-color: #3498db;
-    color: white;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 0.9rem;
-    transition: background-color 0.2s;
+button { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: 600; font-size: 0.9rem; }
+.secondary-btn { background: #ecf0f1; color: #2c3e50; }
+.primary-btn { background: #3498db; color: white; flex: 1; }
+.success-btn { background: #27ae60; color: white; flex: 1; }
+.done-badge { color: #27ae60; font-weight: bold; margin-left: auto; }
+
+/* Return Panel */
+.return-panel, .empty-state {
+    padding: 30px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
 }
 
-.stop-actions button:hover {
-    background-color: #2980b9;
-}
-
-.stop-card.in_transit .stop-actions button {
-    background-color: #f39c12;
-}
-.stop-card.in_transit .stop-actions button:hover {
-    background-color: #e67e22;
-}
-
-.completed-text {
-    color: #2ecc71;
-    font-weight: bold;
+.action-btn {
+    width: 100%;
+    padding: 15px;
     font-size: 1rem;
+    margin-top: 20px;
+    color: white;
 }
+.return-btn { background: #2980b9; }
+.confirm-btn { background: #c0392b; }
 
-/* For mobile responsiveness */
+.instruction { color: #27ae60; font-weight: bold; margin: 10px 0; }
+
+/* Mobile Responsive */
 @media (max-width: 768px) {
-    .driver-main-content {
-        flex-direction: column-reverse; /* Put stops panel on top */
-    }
-    .driver-stops-panel {
-        width: 100%;
-        height: 40vh; /* Give the stops panel a fixed height */
-        border-left: none;
-        border-top: 1px solid #e0e0e0;
-    }
-    .driver-map-container {
-        height: 60vh;
-    }
+    .driver-main-content { flex-direction: column-reverse; }
+    .driver-stops-panel { height: 45vh; min-width: 100%; }
+    .driver-map-container { height: 55vh; }
 }
 
 .custom-div-icon {
-    background: #007bff;
-    color: white;
-    border-radius: 50%;
-    text-align: center;
-    line-height: 30px;
-    font-weight: bold;
-    border: 2px solid white;
-    box-shadow: 0 0 5px rgba(0,0,0,0.5);
+    background: #007bff; color: white; border-radius: 50%; text-align: center;
+    line-height: 30px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
-
-.stop-actions .goto-btn {
-    background-color: #6c757d;
-    margin-right: 10px;
-}
-.stop-actions .goto-btn:hover {
-    background-color: #5a6268;
-}
-.custom-div-icon.warehouse {
-    background-color: #555; /* Dark gray for warehouse */
-    font-size: 1.2rem;
-}
-
-/* --- NEW CSS for Return to Warehouse Button --- */
-.return-warehouse-btn {
-    width: 100%;
-    padding: 0.75rem;
-    font-size: 1rem;
-    font-weight: bold;
-    color: white;
-    background-color: #27ae60;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-}
-
-.return-warehouse-btn:hover {
-    background-color: #229954;
-}
+.custom-div-icon.warehouse { background: #34495e; }

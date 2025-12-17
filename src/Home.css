@@ -1,0 +1,223 @@
+:root {
+  --primary: #007bff;
+  --secondary: #2c3e50;
+  --accent: #ffc107;
+  --light: #f8f9fa;
+  --dark: #343a40;
+}
+
+/* --- Hero Section --- */
+.home-page {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.hero-section {
+  background: linear-gradient(rgba(44, 62, 80, 0.9), rgba(44, 62, 80, 0.8)), url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?ixlib=rb-1.2.1&auto=format&fit=crop&w=1350&q=80');
+  background-size: cover;
+  background-position: center;
+  height: 85vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  text-align: center;
+  padding: 0 20px;
+}
+
+.hero-title { 
+    font-size: 3.5rem; 
+    margin-bottom: 1rem; 
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5); 
+    font-weight: 700;
+}
+
+.hero-subtitle { 
+    font-size: 1.5rem; 
+    margin-bottom: 2.5rem; 
+    opacity: 0.9; 
+    max-width: 700px;
+}
+
+.cta-group { 
+    display: flex; 
+    gap: 20px; 
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.btn-main { 
+    padding: 15px 35px; 
+    border-radius: 30px; 
+    font-size: 1.1rem; 
+    font-weight: bold; 
+    text-decoration: none; 
+    transition: all 0.3s ease; 
+    border: none; 
+    cursor: pointer; 
+    display: inline-block;
+}
+
+.btn-primary { 
+    background-color: var(--primary); 
+    color: white; 
+    box-shadow: 0 4px 15px rgba(0, 123, 255, 0.4);
+}
+
+.btn-primary:hover {
+    background-color: #0056b3;
+    transform: translateY(-3px);
+}
+
+.btn-outline { 
+    border: 2px solid white; 
+    color: white; 
+    background: transparent; 
+}
+
+.btn-outline:hover {
+    background-color: white;
+    color: var(--secondary);
+    transform: translateY(-3px);
+}
+
+/* --- Features Section --- */
+.features-section { 
+    padding: 5rem 2rem; 
+    background-color: white; 
+    text-align: center; 
+}
+
+.features-section h2 {
+    font-size: 2.5rem;
+    color: var(--secondary);
+    margin-bottom: 3rem;
+}
+
+.features-grid { 
+    display: grid; 
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+    gap: 2.5rem; 
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.feature-card { 
+    padding: 2.5rem; 
+    background: white; 
+    border-radius: 15px; 
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08); 
+    transition: transform 0.3s ease;
+    border: 1px solid #eee;
+}
+
+.feature-card:hover {
+    transform: translateY(-10px);
+}
+
+.feature-icon { 
+    font-size: 3rem; 
+    margin-bottom: 1.5rem; 
+    display: block;
+}
+
+.feature-card h3 {
+    color: var(--secondary);
+    margin-bottom: 1rem;
+    font-size: 1.5rem;
+}
+
+.feature-card p {
+    color: #666;
+    line-height: 1.6;
+}
+
+/* --- Auth Forms (Login/Apply) --- */
+.auth-container { 
+    display: flex; 
+    justify-content: center; 
+    align-items: center; 
+    min-height: 100vh; 
+    background-color: #e9ecef; 
+    background-image: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    padding: 20px;
+}
+
+.auth-card { 
+    background: white; 
+    padding: 2.5rem; 
+    border-radius: 15px; 
+    box-shadow: 0 15px 35px rgba(0,0,0,0.1); 
+    width: 100%; 
+    max-width: 450px; 
+}
+
+.auth-card h2 {
+    text-align: center;
+    margin-bottom: 2rem;
+    color: var(--secondary);
+}
+
+.auth-tabs { 
+    display: flex; 
+    margin-bottom: 2rem; 
+    border-bottom: 2px solid #eee; 
+}
+
+.auth-tab { 
+    flex: 1; 
+    padding: 15px; 
+    border: none; 
+    background: none; 
+    cursor: pointer; 
+    font-weight: 600; 
+    color: #888; 
+    font-size: 1rem;
+    transition: color 0.2s;
+}
+
+.auth-tab:hover {
+    color: var(--primary);
+}
+
+.auth-tab.active { 
+    color: var(--primary); 
+    border-bottom: 3px solid var(--primary); 
+    margin-bottom: -2px;
+}
+
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--secondary);
+    font-weight: 500;
+}
+
+.form-group input, 
+.form-group select {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 1rem;
+    box-sizing: border-box;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+
+/* --- Customer Dashboard Specifics --- */
+.customer-panel-header {
+    background: var(--secondary);
+    color: white;
+    padding: 1rem;
+    border-radius: 8px 8px 0 0;
+    text-align: center;
+}

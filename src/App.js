@@ -1,29 +1,27 @@
-// src/App.js
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import Home from './Home';
+import Login from './Login';
+import DriverApply from './DriverApply';
 import AdminDashboard from './AdminDashboard';
 import DriverDashboard from './DriverDashboard';
+import CustomerDashboard from './CustomerDashboard';
 import './App.css';
-
-// A simple home page with links to the dashboards
-function HomePage() {
-  return (
-    <div style={{ textAlign: 'center', padding: '50px' }}>
-      <h1>Parcel Distribution System</h1>
-      <nav>
-        <Link to="/admin" style={{ margin: '20px', fontSize: '1.2rem' }}>Admin Dashboard</Link>
-        {/* In a real app, you would get the driver ID after login */}
-        <Link to="/driver/686e07c93886ceda17f75e7b" style={{ margin: '20px', fontSize: '1.2rem' }}>Driver Dashboard (Demo)</Link>
-      </nav>
-    </div>
-  );
-}
 
 function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<HomePage />} />
+        {/* Public Routes */}
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/apply-driver" element={<DriverApply />} />
+        
+        {/* Customer Routes */}
+        <Route path="/track" element={<CustomerDashboard />} />
+        <Route path="/my-packages" element={<CustomerDashboard />} />
+
+        {/* Protected/Private Routes */}
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/driver/:driverId" element={<DriverDashboard />} />
       </Routes>
