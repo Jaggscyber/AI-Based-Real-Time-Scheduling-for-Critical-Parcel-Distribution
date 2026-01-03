@@ -1,20 +1,20 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import io from 'socket.io-client';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, useMap, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import './App.css';
 import polyline from '@mapbox/polyline';
 
 // --- Configuration ---
 const BACKEND_URL = "http://localhost:5000"; 
+const AI_SERVICE_URL = "http://localhost:5001"; 
 const socket = io(BACKEND_URL, { transports: ['websocket'] });
 const WAREHOUSE_COORDS = [13.0827, 80.2707];
 
 // --- Icons ---
 const createDriverIcon = (driverName, vehicleType) => {
     const initial = driverName ? driverName.charAt(0).toUpperCase() : '?';
-    // Different colors/icons could be used for Truck vs Bike here if desired
     return L.divIcon({ 
         html: `<div class="driver-icon-container">
                  <img src="https://img.icons8.com/plasticine/100/000000/truck.png" class="driver-truck-img"/>
@@ -58,9 +58,17 @@ const MapRecenter = ({ center, zoom }) => {
     return null;
 };
 
-// 2. Click Handler for Adding Points
-function AddDeliveryMarker({ onLocationSelect }) {
-    useMapEvents({ click(e) { onLocationSelect(e.latlng); } });
+// 2. UNIFIED MAP CLICK HANDLER (Handles Traffic Blocks & Delivery Drops)
+function MapClickHandler({ isBlockMode, isAddingDelivery, onBlockAdd, onDeliveryAdd }) {
+    useMapEvents({
+        click(e) {
+            if (isBlockMode) {
+                onBlockAdd(e.latlng);
+            } else if (isAddingDelivery) {
+                onDeliveryAdd(e.latlng);
+            }
+        }
+    });
     return null;
 }
 
@@ -134,7 +142,7 @@ const WarehouseDetailModal = ({ isOpen, onClose, deliveries }) => {
     );
 };
 
-// 4. Add Delivery Modal (With Weight & Deadline)
+// 4. Add Delivery Modal
 const AddDeliveryModal = ({ isOpen, onClose, onSave, mapLocation }) => {
     const [customerName, setCustomerName] = useState('');
     const [customerPhone, setCustomerPhone] = useState('');
@@ -196,8 +204,13 @@ function AdminDashboard() {
     const [drivers, setDrivers] = useState([]);
     const [deliveries, setDeliveries] = useState([]);
     const [routes, setRoutes] = useState([]);
-    const [selectedDriver, setSelectedDriver] = useState(null); // ID of driver to filter map
+    const [selectedDriver, setSelectedDriver] = useState(null); 
     const [mapCenter, setMapCenter] = useState(WAREHOUSE_COORDS);
+    
+    // --- New Comparison / Traffic States ---
+    const [comparisonData, setComparisonData] = useState(null);
+    const [isTrafficMode, setIsTrafficMode] = useState(false); // NEW: Controls the red button
+    const [blockages, setBlockages] = useState([]); // NEW: Stores the Red Circles
     
     // UI States
     const [isAddingDelivery, setIsAddingDelivery] = useState(false);
@@ -236,13 +249,23 @@ function AdminDashboard() {
         return () => { socket.off('scheduleUpdated'); socket.off('driverLocationUpdated'); };
     }, [fetchData]);
 
-    // Handlers
+    // --- Standard Handlers ---
+    
+    // MODIFIED: Accepts blockages
     const handleGenerateSchedule = async () => {
         setAppStatus('generating');
+        setComparisonData(null); 
         setNotification({ msg: "AI is optimizing routes...", isError: false });
+        
+        // Convert Leaflet LatLng objects to array for Python
+        const blockageArray = blockages.map(b => [b.lat, b.lng]);
+
         try {
-            await axios.post(`${BACKEND_URL}/api/schedule`, { algorithm });
-            setNotification({ msg: "Schedule Generated Successfully!", isError: false });
+            await axios.post(`${BACKEND_URL}/api/schedule`, { 
+                algorithm,
+                blockages: blockageArray // SEND TRAFFIC DATA TO BACKEND
+            });
+            setNotification({ msg: `Schedule Generated! (Avoided ${blockages.length} jams)`, isError: false });
             fetchData();
         } catch (err) { setNotification({ msg: "Optimization failed. Check Python Service.", isError: true }); } 
         finally { setAppStatus('ready'); }
@@ -265,6 +288,8 @@ function AdminDashboard() {
             await axios.post(`${BACKEND_URL}/api/drivers/reset-all`);
             setNotification({ msg: 'System Reset Complete.', isError: false });
             setRoutes([]);
+            setComparisonData(null);
+            setBlockages([]); // Clear traffic on reset
             fetchData();
         }
     };
@@ -279,18 +304,61 @@ function AdminDashboard() {
     const handleViewDriverOnMap = (driverId) => {
         setSelectedDriver(driverId);
         setActiveView('map');
-        // Find driver loc to center map
         const driver = drivers.find(d => d._id === driverId);
         if (driver && driver.currentLocation?.coordinates) {
             setMapCenter([driver.currentLocation.coordinates[1], driver.currentLocation.coordinates[0]]);
         }
     };
 
+    // --- NEW: Advanced Features Handlers ---
+    
+    // 1. Toggle Traffic Mode
+    const toggleTrafficMode = () => {
+        setIsTrafficMode(!isTrafficMode);
+        setIsAddingDelivery(false); // Ensure we don't do both at once
+        setComparisonData(null);
+        if(!isTrafficMode) {
+            setNotification({ msg: "🚧 TRAFFIC MODE: Click map to block roads.", isError: false });
+        }
+    };
+
+    // 2. Handle Map Click for Blockage
+    const handleBlockMapClick = (latlng) => {
+        setBlockages([...blockages, latlng]);
+        setNotification({ msg: "Road Blocked! 🛑 Click 'Generate' to reroute.", isError: false });
+    };
+
+    // 3. Comparison Mode
+    const handleCompare = async () => {
+        setNotification({ msg: "Running Comparison Analysis...", isError: false });
+        try {
+            const activeDrivers = drivers.filter(d => !d.isAvailable); 
+            const assignedDeliveries = deliveries.filter(d => d.status === 'assigned');
+
+            if(assignedDeliveries.length === 0) {
+                setNotification({ msg: "Assign deliveries first before comparing.", isError: true });
+                return;
+            }
+            
+            const blockageArray = blockages.map(b => [b.lat, b.lng]);
+
+            const res = await axios.post(`${AI_SERVICE_URL}/compare`, {
+                drivers: activeDrivers.length > 0 ? activeDrivers : drivers, 
+                deliveries: assignedDeliveries,
+                blockages: blockageArray
+            });
+            
+            setComparisonData(res.data);
+            setNotification({ msg: "Comparison Complete!", isError: false });
+        } catch (err) { 
+            console.error(err);
+            setNotification({ msg: "Comparison Failed. Ensure AI service is running.", isError: true });
+        }
+    };
+
     // Filter Logic
     const filteredDrivers = selectedDriver ? drivers.filter(d => d._id === selectedDriver) : drivers;
     const filteredRoutes = selectedDriver ? routes.filter(r => r.driverId === selectedDriver || r.driver?._id === selectedDriver) : routes;
-    
-    // For deliveries, show all if no driver selected, otherwise show only assigned to that driver
     const filteredDeliveries = selectedDriver 
         ? deliveries.filter(d => d.assignedDriver === selectedDriver || d.assignedDriver?._id === selectedDriver) 
         : deliveries;
@@ -421,6 +489,7 @@ function AdminDashboard() {
                             <div className="panel" style={{ width: '300px', display: 'flex', flexDirection: 'column', height:'fit-content' }}>
                                 <h3>Map Controls</h3>
                                 
+                                {/* 1. FILTER CONTROLS */}
                                 {selectedDriver ? (
                                     <div style={{ marginBottom: '20px', padding: '15px', background: '#d1ecf1', borderRadius: '5px', border: '1px solid #bee5eb' }}>
                                         <p style={{ margin: '0 0 10px 0', color: '#0c5460' }}>
@@ -441,12 +510,54 @@ function AdminDashboard() {
                                     </div>
                                 )}
 
+                                {/* 2. ACTION BUTTONS */}
                                 <button 
                                     onClick={handleGenerateSchedule} 
-                                    disabled={appStatus !== 'ready' || selectedDriver} 
+                                    disabled={appStatus !== 'ready'} 
                                     style={{ marginBottom: '15px', padding:'12px', fontSize:'1rem', background: appStatus === 'generating' ? '#f39c12' : '#28a745' }}>
                                     {appStatus === 'generating' ? 'AI is Optimizing...' : 'Generate AI Schedule'}
                                 </button>
+                                <p style={{fontSize:'0.8rem', textAlign:'center', marginTop:-10, marginBottom:10}}>
+                                    Active Constraints: {blockages.length}
+                                    {blockages.length > 0 && <span onClick={()=>setBlockages([])} style={{color:'red', cursor:'pointer', marginLeft:'5px'}}>(Clear)</span>}
+                                </p>
+
+                                {/* 3. NEW FEATURES: TRAFFIC & COMPARE */}
+                                {!selectedDriver && (
+                                    <div style={{ marginBottom: '15px', borderTop:'1px solid #eee', paddingTop:'15px' }}>
+                                        <h4 style={{margin:'0 0 10px 0', fontSize:'0.9rem', color:'#555'}}>Advanced AI Tools</h4>
+                                        
+                                        <button 
+                                            onClick={toggleTrafficMode} 
+                                            style={{ background: isTrafficMode ? '#e74c3c' : '#f39c12', marginBottom: '10px', width: '100%' }}>
+                                            {isTrafficMode ? 'DONE BLOCKING 🛑' : '🚦 Simulate Traffic Jam'}
+                                        </button>
+
+                                        <button 
+                                            onClick={handleCompare} 
+                                            style={{ background: '#8e44ad', width: '100%' }}>
+                                            ⚖ Compare: Google vs AI
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* 4. COMPARISON WIDGET */}
+                                {comparisonData && (
+                                    <div style={{ marginBottom: '15px', padding: '10px', background: '#f8f9fa', border: '1px solid #ddd', fontSize:'0.85rem' }}>
+                                        <h4 style={{margin:'0 0 10px 0'}}>Analysis Result</h4>
+                                        <div style={{color: comparisonData.algo_1.color, marginBottom:'5px'}}>
+                                            <strong>{comparisonData.algo_1.name}</strong><br/>
+                                            {comparisonData.algo_1.duration} | {comparisonData.algo_1.distance}
+                                        </div>
+                                        <div style={{color: comparisonData.algo_2.color}}>
+                                            <strong>{comparisonData.algo_2.name}</strong><br/>
+                                            {comparisonData.algo_2.duration} | {comparisonData.algo_2.distance}
+                                        </div>
+                                        <div style={{marginTop:'8px', fontStyle:'italic', color:'#27ae60'}}>
+                                            AI Efficiency: +{(parseInt(comparisonData.algo_1.duration) - parseInt(comparisonData.algo_2.duration))} mins saved.
+                                        </div>
+                                    </div>
+                                )}
                                 
                                 <div style={{borderTop:'1px solid #eee', paddingTop:'15px'}}>
                                     <button onClick={() => setIsAddingDelivery(!isAddingDelivery)} style={{ background: isAddingDelivery ? '#e74c3c' : '#007bff', width:'100%' }}>
@@ -462,9 +573,24 @@ function AdminDashboard() {
                                     <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                                     <MapRecenter center={mapCenter} zoom={selectedDriver ? 14 : 12} />
                                     
+                                    {/* CLICK HANDLER: Handles Blocks or Deliveries */}
+                                    <MapClickHandler 
+                                        isBlockMode={isTrafficMode}
+                                        isAddingDelivery={isAddingDelivery}
+                                        onBlockAdd={handleBlockMapClick}
+                                        onDeliveryAdd={(loc) => { setNewDeliveryLocation(loc); setDeliveryModalOpen(true); }}
+                                    />
+                                    
                                     <Marker position={WAREHOUSE_COORDS} icon={warehouseIcon}><Popup>Central Warehouse</Popup></Marker>
                                     
-                                    {isAddingDelivery && <AddDeliveryMarker onLocationSelect={(latlng) => { setNewDeliveryLocation(latlng); setDeliveryModalOpen(true); }} />}
+                                    {/* NEW: Traffic Blockages Visuals */}
+                                    {blockages.map((b, idx) => (
+                                        <Circle key={idx} center={b} pathOptions={{ color: 'red', fillColor: 'red', fillOpacity: 0.5 }} radius={300}>
+                                            <Popup>⛔ TRAFFIC JAM REPORTED</Popup>
+                                        </Circle>
+                                    ))}
+                                    
+                                    {isAddingDelivery && <Marker position={mapCenter} icon={createDeliveryIcon('pending')} opacity={0.5} />}
                                     
                                     {/* Drivers */}
                                     {filteredDrivers.map(d => d.currentLocation?.coordinates && (
@@ -489,8 +615,8 @@ function AdminDashboard() {
                                         </Marker>
                                     ))}
 
-                                    {/* Routes */}
-                                    {filteredRoutes.map(r => r.polyline && (
+                                    {/* Routes (Standard) */}
+                                    {!comparisonData && filteredRoutes.map(r => r.polyline && (
                                         <Polyline 
                                             key={r._id} 
                                             positions={polyline.decode(r.polyline)} 
@@ -498,6 +624,30 @@ function AdminDashboard() {
                                             weight={selectedDriver ? 6 : 4} 
                                         />
                                     ))}
+
+                                    {/* Routes (Comparison Mode) */}
+                                    {comparisonData && (
+                                        <>
+                                            <Polyline 
+                                                positions={polyline.decode(comparisonData.algo_1.polyline)} 
+                                                color={comparisonData.algo_1.color} 
+                                                weight={5} 
+                                                opacity={0.6}
+                                                dashArray="10, 10" 
+                                            >
+                                                <Popup>Strategy: {comparisonData.algo_1.name}</Popup>
+                                            </Polyline>
+                                            
+                                            <Polyline 
+                                                positions={polyline.decode(comparisonData.algo_2.polyline)} 
+                                                color={comparisonData.algo_2.color} 
+                                                weight={6} 
+                                            >
+                                                <Popup>Strategy: {comparisonData.algo_2.name}</Popup>
+                                            </Polyline>
+                                        </>
+                                    )}
+
                                 </MapContainer>
                             </div>
                         </div>
