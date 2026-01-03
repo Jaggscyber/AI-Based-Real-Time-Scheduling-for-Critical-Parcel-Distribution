@@ -6,14 +6,14 @@ const Route = require('./models/routeModel');
 
 const seedData = async () => {
     try {
-        console.log('🌱 Starting Database Seed...');
+        console.log('Starting Database Seed...');
 
         // 1. CLEAR EXISTING DATA
         await Driver.deleteMany({});
         await Delivery.deleteMany({});
         await Route.deleteMany({});
         // await User.deleteMany({}); // Optional: Reset users
-        console.log('🧹 Old data cleared.');
+        console.log('Old data cleared.');
 
         // 2. CREATE DRIVERS
         const drivers = await Driver.insertMany([
@@ -45,7 +45,7 @@ const seedData = async () => {
                 assignedZone: "West Chennai"
             }
         ]);
-        console.log(`✅ Added ${drivers.length} Drivers`);
+        console.log(`Added ${drivers.length} Drivers`);
 
         // 3. CREATE DELIVERIES
         const deliveries = await Delivery.insertMany([
@@ -84,11 +84,11 @@ const seedData = async () => {
                 zone: "West Chennai"
             }
         ]);
-        console.log(`✅ Added ${deliveries.length} Deliveries`);
-        console.log('🎉 Seeding Complete!');
+        console.log(`Added ${deliveries.length} Deliveries`);
+        console.log('Seeding Complete!');
         
     } catch (error) {
-        console.error('❌ Seeding Error:', error);
+        console.error('Seeding Error:', error);
     }
 };
 

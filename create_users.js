@@ -1,73 +1,77 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const dotenv = require('dotenv');
-const Driver = require('./models/driverModel');
+const Delivery = require('./models/deliveryModel');
 const User = require('./models/userModel');
+require('dotenv').config();
 
-// Load environment variables
-dotenv.config();
-
-const createUsersForDrivers = async () => {
+const createAllCustomers = async () => {
     try {
-        // 1. Connect to MongoDB
+        // 1. Connect to Database
         const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/parcel_distribution_ai';
         await mongoose.connect(MONGO_URI);
-        console.log('✅ MongoDB Connected');
+        console.log('Connected to DB');
 
-        // 2. Fetch all drivers
-        const drivers = await Driver.find({});
-        console.log(`🔍 Found ${drivers.length} drivers. Checking for missing logins...`);
+        // 2. Find all unique customers from Delivery History
+        // We group by phone number to ensure unique users
+        const uniqueCustomers = await Delivery.aggregate([
+            {
+                $group: {
+                    _id: "$customerPhone", // Group by Phone Number
+                    name: { $first: "$customerName" }, // Take the first name found
+                    address: { $first: "$fullAddress" }
+                }
+            }
+        ]);
+
+        console.log(`🔍 Found ${uniqueCustomers.length} unique customers in delivery history.`);
 
         const salt = await bcrypt.genSalt(10);
-        const defaultPassword = await bcrypt.hash('password123', salt); // Default password
-
+        const defaultPassword = await bcrypt.hash('password123', salt);
         let createdCount = 0;
 
-        for (const driver of drivers) {
-            // Fix: If driver has no email (dummy data), generate one
-            let driverEmail = driver.email;
-            let needsSave = false;
+        // 3. Loop through and create User accounts
+        for (const cust of uniqueCustomers) {
+            const phone = cust._id;
+            const name = cust.name;
+            
+            // Skip invalid data
+            if (!phone || phone === "000-000-0000" || !name) continue;
 
-            if (!driverEmail) {
-                const sanitizedName = driver.name.toLowerCase().replace(/\s+/g, '.').replace(/[^a-z0-9.]/g, '');
-                driverEmail = `${sanitizedName}@driver.com`;
-                driver.email = driverEmail;
-                needsSave = true;
-                console.log(`⚠️ Driver ${driver.name} had no email. Generated: ${driverEmail}`);
-            }
+            // Generate a dummy email for login: "phone@customer.com"
+            // Example: 9876543210@customer.com
+            const generatedEmail = `${phone.replace(/\D/g, '')}@customer.com`;
 
-            // Check if User exists
-            const existingUser = await User.findOne({ email: driverEmail });
+            // Check if User already exists
+            const existingUser = await User.findOne({ 
+                $or: [{ email: generatedEmail }, { phone: phone }] 
+            });
 
             if (!existingUser) {
-                // Create new User Login
                 const newUser = new User({
-                    name: driver.name,
-                    email: driverEmail,
+                    name: name,
+                    email: generatedEmail,
                     password: defaultPassword,
-                    role: 'driver',
-                    phone: '0000000000',
-                    address: 'Registered via Script'
+                    phone: phone,
+                    role: 'customer',
+                    address: cust.address || "Registered via Script"
                 });
+
                 await newUser.save();
                 createdCount++;
-                console.log(`✅ Created Login for: ${driver.name} (${driverEmail})`);
+                console.log(`Created: ${name} | Login: ${generatedEmail}`);
             } else {
-                console.log(`ℹ️ Login already exists for: ${driver.name}`);
+                console.log(`Exists: ${name}`);
             }
-
-            // Save driver if we auto-generated an email
-            if (needsSave) await driver.save();
         }
 
-        console.log(`\n🎉 Process Complete! Created ${createdCount} new login accounts.`);
-        console.log(`👉 Default Password for all new accounts: password123`);
+        console.log(`\n🎉 Process Complete! Created ${createdCount} new customer accounts.`);
+        console.log(`👉 Default Password: password123`);
         process.exit();
 
-    } catch (error) {
-        console.error('❌ Error:', error);
+    } catch (err) {
+        console.error('Error:', err);
         process.exit(1);
     }
 };
 
-createUsersForDrivers();
+createAllCustomers();

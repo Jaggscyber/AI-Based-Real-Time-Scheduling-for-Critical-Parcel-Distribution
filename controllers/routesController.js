@@ -6,6 +6,40 @@ const { calculateOptimizedRoute } = require('../utils/routeOptimizer');
 
 const WAREHOUSE_COORDS = { type: 'Point', coordinates: [80.2707, 13.0827] };
 
+// Helper to swap [Lng, Lat] -> "Lat,Lng"
+const toGoogleCoords = (coords) => {
+    if (Array.isArray(coords)) return `${coords[1]},${coords[0]}`; 
+    if (coords && coords.lat && coords.lng) return `${coords.lat},${coords.lng}`;
+    return null;
+};
+
+// --- NEW FUNCTION: GET SINGLE LEG ROUTE ---
+exports.getRouteLeg = async (req, res) => {
+    const { start, end } = req.body; // Expects objects {lat, lng} or arrays [lng, lat]
+    
+    try {
+        const startStr = toGoogleCoords(start);
+        const endStr = toGoogleCoords(end);
+        
+        if(!startStr || !endStr) {
+            return res.status(400).json({ msg: "Invalid coordinates" });
+        }
+
+        // Calculate route for just these 2 points
+        const result = await calculateOptimizedRoute([startStr, endStr]);
+        
+        if (result) {
+            res.status(200).json({ polyline: result.polyline });
+        } else {
+            res.status(500).json({ msg: "Could not calculate path" });
+        }
+    } catch (err) {
+        console.error("Leg Error:", err.message);
+        res.status(500).send('Server Error');
+    }
+};
+// ------------------------------------------
+
 exports.getDriverRoute = async (req, res) => {
   try {
     let route = await Route.findOne({
@@ -17,10 +51,7 @@ exports.getDriverRoute = async (req, res) => {
 
     if (!route) {
         const driver = await Driver.findById(req.params.driverId).select('name currentLocation');
-        if (!driver) {
-            return res.status(404).json({ msg: 'Driver not found.' });
-        }
-        // If no route, return a default inactive structure
+        if (!driver) return res.status(404).json({ msg: 'Driver not found.' });
         return res.status(200).json({ driver: driver, stops: [], status: 'inactive' });
     }
     res.status(200).json(route);
@@ -33,9 +64,8 @@ exports.getDriverRoute = async (req, res) => {
 exports.getAllRoutes = async (req, res) => {
     try {
         const routes = await Route.find({ status: { $ne: 'completed' } })
-            .populate('driver', 'name') // Get the driver's name
-            .populate('stops');         // Get full details for each delivery stop
-
+            .populate('driver', 'name')
+            .populate('stops');
         res.status(200).json(routes);
     } catch (err) {
         console.error("Error fetching routes:", err.message);
@@ -43,18 +73,15 @@ exports.getAllRoutes = async (req, res) => {
     }
 };
 
-
-
-
 exports.addStopToRoute = async (req, res) => {
     const { driverId, deliveryId } = req.body;
     try {
         const driver = await Driver.findById(driverId);
-        if (!driver) { return res.status(404).json({ msg: 'Driver not found.' }); }
+        if (!driver) return res.status(404).json({ msg: 'Driver not found.' });
 
         const delivery = await Delivery.findById(deliveryId);
         if (!delivery || delivery.status !== 'pending') {
-            return res.status(400).json({ msg: 'This delivery is not pending.' });
+            return res.status(400).json({ msg: 'Delivery not pending.' });
         }
 
         let route = await Route.findOne({ driver: driverId, status: { $ne: 'completed' } });
@@ -73,7 +100,7 @@ exports.addStopToRoute = async (req, res) => {
         await delivery.save();
         
         const io = req.app.get('socketio');
-        io.emit('scheduleUpdated', { message: `New delivery assigned to driver ${driver.name}` });
+        if(io) io.emit('scheduleUpdated', { message: `New delivery assigned to ${driver.name}` });
         res.status(200).json(route);
     } catch (err) {
         res.status(500).send('Server Error');
@@ -85,38 +112,41 @@ exports.recalculateRoute = async (req, res) => {
     try {
         const route = await Route.findOne({ driver: driverId, status: { $ne: 'completed' } }).populate('stops');
         
-        // This case handles a driver finishing their last delivery and needing a route to the warehouse
+        const startPoint = currentLocation 
+            ? toGoogleCoords(currentLocation) 
+            : toGoogleCoords(WAREHOUSE_COORDS.coordinates); 
+
+        const warehouseStr = toGoogleCoords(WAREHOUSE_COORDS.coordinates);
+
         if (!route && currentLocation) {
-            const waypoints = [`${currentLocation.lng},${currentLocation.lat}`, WAREHOUSE_COORDS.coordinates.join(',')];
-            const optimizationResult = await calculateOptimizedRoute(waypoints);
-            return res.status(200).json({ polyline: optimizationResult.polyline });
+            const waypoints = [startPoint, warehouseStr];
+            const result = await calculateOptimizedRoute(waypoints);
+            return res.status(200).json({ polyline: result?.polyline || '' });
         }
 
-        if (!route) {
-            return res.status(404).json({ msg: 'Active route not found for this driver.' });
-        }
+        if (!route) return res.status(404).json({ msg: 'Active route not found.' });
 
         const remainingStops = route.stops.filter(stop => stop.status !== 'delivered');
         
-        // This case handles the final delivery and generates the route to the warehouse
         if (remainingStops.length === 0) {
-            const startPoint = currentLocation ? `${currentLocation.lng},${currentLocation.lat}` : WAREHOUSE_COORDS.coordinates.join(',');
-            const waypoints = [startPoint, WAREHOUSE_COORDS.coordinates.join(',')];
-            const optimizationResult = await calculateOptimizedRoute(waypoints);
-            if (optimizationResult) {
-                route.polyline = optimizationResult.polyline;
+            const waypoints = [startPoint, warehouseStr];
+            const result = await calculateOptimizedRoute(waypoints);
+            if (result) {
+                route.polyline = result.polyline;
                 await route.save();
             }
             return res.status(200).json(route);
         }
         
-        // This case handles normal mid-route recalculations
-        const startPoint = currentLocation ? `${currentLocation.lng},${currentLocation.lat}` : WAREHOUSE_COORDS.coordinates.join(',');
-        const waypoints = [startPoint, ...remainingStops.map(stop => stop.pickupLocation.coordinates.join(','))];
+        const waypoints = [
+            startPoint, 
+            ...remainingStops.map(stop => toGoogleCoords(stop.pickupLocation.coordinates))
+        ];
+
         const optimizationResult = await calculateOptimizedRoute(waypoints);
 
         if (!optimizationResult) {
-            return res.status(500).json({ msg: 'Failed to recalculate route.' });
+            return res.status(200).json(route); 
         }
         
         route.polyline = optimizationResult.polyline;
@@ -125,7 +155,7 @@ exports.recalculateRoute = async (req, res) => {
         route.legs = optimizationResult.legs;
         await route.save();
         
-        const finalRoute = await Route.findById(route._id).populate('driver', 'name currentLocation').populate({ path: 'stops', model: 'Delivery' });
+        const finalRoute = await Route.findById(route._id).populate('driver', 'name currentLocation').populate('stops');
         res.status(200).json(finalRoute);
 
     } catch (error) {
@@ -133,4 +163,3 @@ exports.recalculateRoute = async (req, res) => {
         res.status(500).send('Server Error');
     }
 };
-// The extra brace that was here has been removed

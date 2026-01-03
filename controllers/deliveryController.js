@@ -200,3 +200,42 @@ exports.deleteDelivery = async (req, res) => {
         res.status(500).send('Server Error');
     }
 };
+exports.trackOrder = async (req, res) => {
+    try {
+        const { trackingId } = req.params;
+        let delivery;
+
+        // Check if input is a valid MongoDB ID (24 chars)
+        if (trackingId.match(/^[0-9a-fA-F]{24}$/)) {
+            delivery = await Delivery.findById(trackingId).populate('assignedDriver', 'name phone currentLocation');
+        } 
+        // If not, try searching by Phone Number
+        else {
+            // Find the most recent active order for this phone number
+            delivery = await Delivery.findOne({ customerPhone: trackingId })
+                                     .sort({ createdAt: -1 }) // Get newest
+                                     .populate('assignedDriver', 'name phone currentLocation');
+        }
+
+        if (!delivery) {
+            return res.status(404).json({ msg: 'Order not found.' });
+        }
+
+        // ... (rest of your response construction code remains the same) ...
+        const response = {
+            id: delivery._id,
+            status: delivery.status,
+            items: delivery.items || ['Package'],
+            customerName: delivery.customerName,
+            pickupLocation: delivery.pickupLocation,
+            dropoffLocation: delivery.dropoffLocation,
+            eta: 'Calculating...', 
+        };
+        // ... (keep driver logic) ...
+
+        res.status(200).json(response);
+    } catch (err) {
+        console.error('Tracking Error:', err.message);
+        res.status(500).send('Server Error');
+    }
+};
