@@ -2,11 +2,12 @@ import numpy as np
 import random
 
 class GeneticScheduler:
-    def __init__(self, distance_matrix, deliveries, driver_capacity, driver_range, n_pop=50, n_gen=100):
+    def __init__(self, distance_matrix, deliveries, driver_capacity, driver_range, vehicle_size='small', n_pop=50, n_gen=100):
         self.matrix = distance_matrix
         self.deliveries = deliveries
         self.capacity = driver_capacity
         self.max_range = driver_range
+        self.vehicle_size = vehicle_size
         self.n_pop = n_pop
         self.n_gen = n_gen
         self.n_stops = len(distance_matrix) - 1 
@@ -37,7 +38,21 @@ class GeneticScheduler:
             pkg_weight = self.deliveries[route[i]].get('weight', 5) 
             current_load += pkg_weight
             
-            # B. TIME DEADLINE CHECK
+            # B. SIZE CHECK - Penalty for wrong vehicle-package size match
+            pkg_size = self.deliveries[route[i]].get('size', 'small')
+            if pkg_size == 'large' and self.vehicle_size != 'large':
+                penalty += 5000  # Large packages need large vehicles
+            elif pkg_size == 'medium' and self.vehicle_size == 'small':
+                penalty += 2000  # Medium packages can't go on small vehicles
+            # Small packages can go on any vehicle
+            
+            # C. AREA CHECK - Penalty for wrong area assignment
+            pkg_area = self.deliveries[route[i]].get('area', 'urban')
+            # Urban areas prefer faster vehicles, rural areas can use any
+            if pkg_area == 'urban' and self.speed_km_per_min < 0.5:  # Urban needs faster vehicles
+                penalty += 1500
+            
+            # D. TIME DEADLINE CHECK
             deadline = self.deliveries[route[i]].get('deadline', 9999)
             if current_time_min > deadline:
                 penalty += 5000 # LATE!
