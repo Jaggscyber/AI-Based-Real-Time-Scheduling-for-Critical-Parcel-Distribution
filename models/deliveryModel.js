@@ -31,6 +31,12 @@ const DeliverySchema = new mongoose.Schema({
   // Weight in kg (Default 5kg)
   weight: { type: Number, default: 5 }, 
   
+  // Area (urban, suburban, rural)
+  area: { type: String, enum: ['urban', 'suburban', 'rural'], default: 'urban' },
+  
+  // Emergency delivery (medicine, urgent items)
+  emergency: { type: Boolean, default: false },
+  
   // Time Window in Minutes from 8:00 AM (e.g., 60 = 9:00 AM)
   deadline: { type: Number, default: 480 }, // Default 4:00 PM (8hrs * 60)
   // ---------------------

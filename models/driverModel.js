@@ -9,6 +9,7 @@ const driverSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, trim: true, lowercase: true },
     vehicleType: { type: String, default: 'Bike' },
+    vehicleSize: { type: String, enum: ['small', 'medium', 'large'], default: 'small' },
     license: { type: String, default: 'N/A' },
     
     // --- NEW AI FIELDS ---

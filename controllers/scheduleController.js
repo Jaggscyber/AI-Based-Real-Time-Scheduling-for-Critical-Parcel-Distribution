@@ -66,9 +66,11 @@ exports.generateSchedule = async (req, res) => {
 
     await Promise.all(databaseUpdatePromises);
 
-    const finalMessage = `Schedule Generated with ${blockages ? blockages.length : 0} active blockages.`;
+    const finalMessage = blockages && blockages.length > 0 
+        ? `Schedule Updated! AI rerouted ${summaryMessages.length} drivers around ${blockages.length} traffic blocks.`
+        : `Schedule Generated! Assigned ${summaryMessages.length} routes.`;
     const io = req.app.get('socketio');
-    if(io) io.emit('scheduleUpdated', { message: finalMessage });
+    if(io) io.emit('scheduleUpdated', { message: finalMessage, blockages: blockages?.length || 0 });
     
     res.status(200).json({ success: true, message: finalMessage });
 

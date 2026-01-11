@@ -41,7 +41,10 @@ exports.createDelivery = async (req, res) => {
             items, 
             cost, 
             weight,    // <--- Added
-            deadline   // <--- Added
+            area,      // <--- Added
+            size,      // <--- Added
+            deadline,  // <--- Added
+            emergency  // <--- Added
         } = req.body;
         
         // Basic Validation
@@ -59,7 +62,10 @@ exports.createDelivery = async (req, res) => {
             items: items || [],
             cost: cost || 0,
             weight: weight || 5,      // Default 5kg
-            deadline: deadline || 480 // Default 8 hours
+            area: area || 'urban',    // Default urban
+            size: size || 'small',    // Default small
+            deadline: deadline || 480, // Default 8 hours
+            emergency: emergency || false
         });
 
         await newDelivery.save();
