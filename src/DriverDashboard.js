@@ -4,7 +4,6 @@ import io from 'socket.io-client';
 import { useParams } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import polyline from '@mapbox/polyline';
 import './DriverDashboard.css';
 
 const BACKEND_URL = "http://localhost:5000";
@@ -46,7 +45,75 @@ function DriverDashboard() {
     const [focusedStop, setFocusedStop] = useState(null);
     const [focusedPolyline, setFocusedPolyline] = useState(null); // Stores the single leg line
 
+    // --- ALERT STATES ---
+    const [alerts, setAlerts] = useState([]);
+    const [showAlert, setShowAlert] = useState(false);
+    const [currentAlert, setCurrentAlert] = useState(null);
+
+    // --- ROUTE UPDATE TRACKING ---
+    const [previousRoute, setPreviousRoute] = useState(null);
+    const [routeUpdated, setRouteUpdated] = useState(false);
+
+    // --- RANGE TRACKING ---
+    const [remainingRange, setRemainingRange] = useState(300); // Default 300km for EV
+    const [totalRange, setTotalRange] = useState(300);
+    const [chargingStations, setChargingStations] = useState([]);
+    const [petrolStations, setPetrolStations] = useState([]);
+
     const [loading, setLoading] = useState(true);
+
+    // --- RANGE CALCULATION FUNCTIONS ---
+    const calculateRange = (distanceTraveled) => {
+        const consumptionRate = driver?.vehicleType === 'EV' ? 15 : 8; // kWh/100km for EV, L/100km for petrol
+        const rangeUsed = (distanceTraveled * consumptionRate) / 100;
+        return Math.max(0, totalRange - rangeUsed);
+    };
+
+    const fetchNearbyStations = async (location) => {
+        try {
+            // Mock charging stations around Chennai area
+            const mockStations = [
+                { id: 1, name: 'Tesla Supercharger T.Nagar', lat: 13.0827, lng: 80.2707, type: 'charging' },
+                { id: 2, name: 'Ather Grid Anna Nagar', lat: 13.0850, lng: 80.2100, type: 'charging' },
+                { id: 3, name: 'Bharat Petroleum Adyar', lat: 13.0067, lng: 80.2572, type: 'petrol' },
+                { id: 4, name: 'Indian Oil Teynampet', lat: 13.0400, lng: 80.2500, type: 'petrol' },
+                { id: 5, name: 'HP Petrol Bunk Velachery', lat: 12.9750, lng: 80.2200, type: 'petrol' },
+                { id: 6, name: 'ChargePoint Marina Beach', lat: 13.0827, lng: 80.2707, type: 'charging' }
+            ];
+            
+            const charging = mockStations.filter(s => s.type === 'charging');
+            const petrol = mockStations.filter(s => s.type === 'petrol');
+            
+            setChargingStations(charging);
+            setPetrolStations(petrol);
+        } catch (err) {
+            console.error('Error fetching stations:', err);
+        }
+    };
+
+    // --- ALERT FUNCTIONS ---
+    const showTrafficAlert = (message) => {
+        const alert = {
+            id: Date.now(),
+            type: 'traffic',
+            message: message,
+            timestamp: new Date()
+        };
+        setAlerts(prev => [alert, ...prev]);
+        setCurrentAlert(alert);
+        setShowAlert(true);
+        
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            setShowAlert(false);
+            setCurrentAlert(null);
+        }, 10000);
+    };
+
+    const dismissAlert = () => {
+        setShowAlert(false);
+        setCurrentAlert(null);
+    };
 
     useEffect(() => {
         const fetchDriverData = async () => {
@@ -55,16 +122,56 @@ function DriverDashboard() {
                 const res = await axios.get(`${BACKEND_URL}/api/routes/${driverId}`);
                 setRoute(res.data);
                 setDriver(res.data.driver);
+                
+                // Initialize range based on vehicle type
+                if (res.data.driver?.vehicleType === 'EV') {
+                    setTotalRange(300); // 300km for EV
+                    setRemainingRange(300);
+                } else {
+                    setTotalRange(400); // 400km for petrol vehicles
+                    setRemainingRange(400);
+                }
+                
+                // Fetch nearby stations
+                fetchNearbyStations({ lat: 13.0827, lng: 80.2707 });
             } catch (err) {
                 console.error(err);
             } finally { setLoading(false); }
         };
         if (driverId) fetchDriverData();
         
-        const handleUpdate = () => fetchDriverData();
+        const handleUpdate = (data) => {
+            const oldRoute = route;
+            fetchDriverData();
+            if (data?.message && data.message.includes('blockages')) {
+                showTrafficAlert('🚧 Route updated due to traffic conditions! New optimized route has been assigned.');
+                setPreviousRoute(oldRoute);
+                setRouteUpdated(true);
+                // Auto-clear after 30 seconds
+                setTimeout(() => {
+                    setRouteUpdated(false);
+                    setPreviousRoute(null);
+                }, 30000);
+            }
+        };
         socket.on('scheduleUpdated', handleUpdate);
         return () => socket.off('scheduleUpdated', handleUpdate);
     }, [driverId]);
+
+    // --- GPS LOCATION TRACKING WITH RANGE ---
+    const [lastLocation, setLastLocation] = useState(null);
+    const [totalDistanceTraveled, setTotalDistanceTraveled] = useState(0);
+
+    const calculateDistance = (lat1, lng1, lat2, lng2) => {
+        const R = 6371; // Earth's radius in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLng/2) * Math.sin(dLng/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    };
 
     useEffect(() => {
         if (!driverId) return;
@@ -72,6 +179,23 @@ function DriverDashboard() {
             (position) => {
                 const newLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
                 setCurrentLocation(newLoc);
+                
+                // Calculate distance traveled and update range
+                if (lastLocation) {
+                    const distance = calculateDistance(
+                        lastLocation.lat, lastLocation.lng,
+                        newLoc.lat, newLoc.lng
+                    );
+                    const newTotalDistance = totalDistanceTraveled + distance;
+                    setTotalDistanceTraveled(newTotalDistance);
+                    
+                    // Update remaining range
+                    const newRemainingRange = calculateRange(newTotalDistance);
+                    setRemainingRange(newRemainingRange);
+                }
+                
+                setLastLocation(newLoc);
+                
                 socket.emit('updateDriverLocation', { 
                     driverId, 
                     location: { type: 'Point', coordinates: [newLoc.lng, newLoc.lat] } 
@@ -81,7 +205,7 @@ function DriverDashboard() {
             { enableHighAccuracy: true }
         );
         return () => navigator.geolocation.clearWatch(watchId);
-    }, [driverId]);
+    }, [driverId, lastLocation, totalDistanceTraveled]);
 
     useEffect(() => {
         if (route?.stops?.length > 0) {
@@ -170,18 +294,78 @@ function DriverDashboard() {
     if (loading) return <div className="loading-screen">Loading Route...</div>;
 
     const noRouteAssigned = !route || !route.stops || route.stops.length === 0 || route.status === 'inactive';
-    const decodedPolyline = route?.polyline ? polyline.decode(route.polyline) : [];
-    const decodedReturnPolyline = returnRoutePolyline ? polyline.decode(returnRoutePolyline) : [];
-    const decodedFocusedPolyline = focusedPolyline ? polyline.decode(focusedPolyline) : [];
+    const decodedPolyline = route?.polyline ? JSON.parse(route.polyline) : [];
+    const decodedReturnPolyline = returnRoutePolyline ? JSON.parse(returnRoutePolyline) : [];
+    const decodedFocusedPolyline = focusedPolyline ? JSON.parse(focusedPolyline) : [];
 
     return (
         <div className="driver-dashboard">
             <header className="driver-header">
                 <div>
                     <h1>{driver?.name || 'Driver'}</h1>
-                    <span className="subtitle">{isRouteComplete ? 'Return to Base' : (viewMode === 'focus' ? 'Navigation Mode' : 'Active Delivery Route')}</span>
+                    <span className="subtitle">
+                        {isRouteComplete ? 'Return to Base' : (viewMode === 'focus' ? 'Navigation Mode' : 'Active Delivery Route')}
+                        {routeUpdated && <span style={{color: '#e74c3c', fontWeight: 'bold', marginLeft: '10px'}}>🔄 ROUTE UPDATED</span>}
+                    </span>
+                </div>
+                <div className="driver-status">
+                    <div className="range-indicator" style={{
+                        background: remainingRange < 50 ? '#e74c3c' : remainingRange < 100 ? '#f39c12' : '#27ae60',
+                        color: 'white',
+                        padding: '8px 12px',
+                        borderRadius: '20px',
+                        fontSize: '0.9rem',
+                        fontWeight: 'bold',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px'
+                    }}>
+                        {driver?.vehicleType === 'EV' ? '⚡' : '⛽'} 
+                        {remainingRange.toFixed(1)} / {totalRange} km
+                        {remainingRange < 50 && <span style={{fontSize: '1.2rem'}}>⚠️</span>}
+                    </div>
                 </div>
             </header>
+
+            {/* TRAFFIC ALERT */}
+            {showAlert && currentAlert && (
+                <div className="traffic-alert" style={{
+                    background: 'linear-gradient(135deg, #ff6b6b, #ee5a24)',
+                    color: 'white',
+                    padding: '15px 20px',
+                    margin: '0 20px',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    animation: 'slideDown 0.5s ease-out'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '1.5rem' }}>🚨</span>
+                        <div>
+                            <strong>Route Update Alert</strong>
+                            <p style={{ margin: '5px 0 0 0', fontSize: '0.9rem', opacity: 0.9 }}>
+                                {currentAlert.message}
+                            </p>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={dismissAlert}
+                        style={{
+                            background: 'rgba(255,255,255,0.2)',
+                            border: 'none',
+                            color: 'white',
+                            padding: '5px 10px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '1.2rem'
+                        }}
+                    >
+                        ×
+                    </button>
+                </div>
+            )}
 
             <div className="driver-main-content">
                 <div className="driver-map-container">
@@ -218,18 +402,82 @@ function DriverDashboard() {
                             </Marker>
                         )}
 
+                        {/* --- CHARGING & PETROL STATIONS --- */}
+                        {driver?.vehicleType === 'EV' && chargingStations.map(station => (
+                            <Marker 
+                                key={`charging-${station.id}`} 
+                                position={[station.lat, station.lng]}
+                                icon={L.divIcon({
+                                    html: `<div style="background: #27ae60; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: bold;">⚡</div>`,
+                                    className: 'charging-station-icon',
+                                    iconSize: [30, 30],
+                                    iconAnchor: [15, 15]
+                                })}
+                            >
+                                <Popup>
+                                    <strong>{station.name}</strong><br/>
+                                    <span style={{color: '#27ae60'}}>⚡ EV Charging Station</span><br/>
+                                    <button 
+                                        onClick={() => alert(`Navigate to ${station.name}?`)}
+                                        style={{background: '#27ae60', color: 'white', border: 'none', padding: '5px 10px', borderRadius: '3px', marginTop: '5px'}}
+                                    >
+                                        Navigate Here
+                                    </button>
+                                </Popup>
+                            </Marker>
+                        ))}
+
+                        {driver?.vehicleType !== 'EV' && petrolStations.map(station => (
+                            <Marker 
+                                key={`petrol-${station.id}`} 
+                                position={[station.lat, station.lng]}
+                                icon={L.divIcon({
+                                    html: `<div style="background: #e74c3c; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: bold;">⛽</div>`,
+                                    className: 'petrol-station-icon',
+                                    iconSize: [30, 30],
+                                    iconAnchor: [15, 15]
+                                })}
+                            >
+                                <Popup>
+                                    <strong>{station.name}</strong><br/>
+                                    <span style={{color: '#e74c3c'}}>⛽ Petrol Station</span><br/>
+                                    <button 
+                                        onClick={() => alert(`Navigate to ${station.name}?`)}
+                                        style={{background: '#e74c3c', color: 'white', border: 'none', padding: '5px 10px', borderRadius: '3px', marginTop: '5px'}}
+                                    >
+                                        Navigate Here
+                                    </button>
+                                </Popup>
+                            </Marker>
+                        ))}
+
                         {/* --- ROUTES --- */}
-                        {/* 1. Full Route (Blue) */}
-                        {viewMode === 'full' && !isReturning && decodedPolyline.length > 0 && (
-                            <Polyline positions={decodedPolyline} color="#3498db" weight={5} />
+                        {/* 1. Previous Route (Gray/Dashed) - Show when route was updated */}
+                        {routeUpdated && previousRoute?.polyline && viewMode === 'full' && !isReturning && (
+                            <Polyline 
+                                positions={JSON.parse(previousRoute.polyline)} 
+                                color="#6c757d" 
+                                weight={3}
+                                opacity={0.5}
+                                dashArray="5, 10"
+                            >
+                                <Popup>Previous Route (before traffic update)</Popup>
+                            </Polyline>
                         )}
                         
-                        {/* 2. Focused Leg (Green) */}
+                        {/* 2. Current Route (Blue) */}
+                        {viewMode === 'full' && !isReturning && decodedPolyline.length > 0 && (
+                            <Polyline positions={decodedPolyline} color="#3498db" weight={5}>
+                                <Popup>Current Optimized Route {routeUpdated ? '(traffic-aware)' : ''}</Popup>
+                            </Polyline>
+                        )}
+                        
+                        {/* 3. Focused Leg (Green) */}
                         {viewMode === 'focus' && decodedFocusedPolyline.length > 0 && (
                             <Polyline positions={decodedFocusedPolyline} color="#2ecc71" weight={6} />
                         )}
 
-                        {/* 3. Return Route (Dashed Green) */}
+                        {/* 4. Return Route (Dashed Green) */}
                         {decodedReturnPolyline.length > 0 && (
                             <Polyline positions={decodedReturnPolyline} color="#27ae60" weight={5} dashArray="10, 10" />
                         )}

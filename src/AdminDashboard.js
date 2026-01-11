@@ -4,7 +4,6 @@ import io from 'socket.io-client';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, useMap, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import './App.css';
-import polyline from '@mapbox/polyline';
 
 // --- Configuration ---
 const BACKEND_URL = "http://localhost:5000"; 
@@ -48,13 +47,16 @@ const createDeliveryIcon = (status) => {
 // --- Helper Components ---
 
 // 1. Map Recenter Controller
-const MapRecenter = ({ center, zoom }) => {
+const MapRecenter = ({ center, zoom, bounds }) => {
     const map = useMap();
     useEffect(() => {
-        if (center) {
+        if (bounds && bounds.length > 0) {
+            // Fit bounds to show all route points
+            map.fitBounds(bounds, { padding: [20, 20] });
+        } else if (center) {
             map.flyTo(center, zoom || 13, { duration: 1.5 });
         }
-    }, [center, zoom, map]);
+    }, [center, zoom, bounds, map]);
     return null;
 };
 
@@ -146,16 +148,20 @@ const WarehouseDetailModal = ({ isOpen, onClose, deliveries }) => {
 const AddDeliveryModal = ({ isOpen, onClose, onSave, mapLocation }) => {
     const [customerName, setCustomerName] = useState('');
     const [customerPhone, setCustomerPhone] = useState('');
+    const [fullAddress, setFullAddress] = useState('');
+    const [area, setArea] = useState('urban');
     const [zone, setZone] = useState('Unzoned');
     const [weight, setWeight] = useState(5);
+    const [size, setSize] = useState('medium'); // small, medium, large
     const [deadline, setDeadline] = useState(480);
+    const [emergency, setEmergency] = useState(false);
 
     if (!isOpen) return null;
 
     const handleSave = () => {
         if (!customerName || !mapLocation) { alert('Name and Location required'); return; }
-        onSave({ customerName, customerPhone, zone, weight, deadline });
-        setCustomerName(''); setCustomerPhone(''); setZone('Unzoned'); setWeight(5); setDeadline(480);
+        onSave({ customerName, customerPhone, fullAddress, area, zone, weight, size, deadline, emergency });
+        setCustomerName(''); setCustomerPhone(''); setFullAddress(''); setArea('urban'); setZone('Unzoned'); setWeight(5); setSize('medium'); setDeadline(480); setEmergency(false);
     };
 
     return (
@@ -166,19 +172,44 @@ const AddDeliveryModal = ({ isOpen, onClose, onSave, mapLocation }) => {
                 <p className="help-text">Location: {mapLocation ? `${mapLocation.lat.toFixed(4)}, ${mapLocation.lng.toFixed(4)}` : 'None'}</p>
                 
                 <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
-                    <input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Customer Name" />
+                    <input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Customer Name" required />
                     <input value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="Phone Number" />
+                    <input value={fullAddress} onChange={e => setFullAddress(e.target.value)} placeholder="Full Address" />
+                    
+                    <div style={{flex:1}}>
+                        <label style={{fontSize:'0.85rem', fontWeight:'bold'}}>Area Type</label>
+                        <select value={area} onChange={e => setArea(e.target.value)} style={{width:'100%', padding:'8px'}}>
+                            <option value="urban">Urban</option>
+                            <option value="suburban">Suburban</option>
+                            <option value="rural">Rural</option>
+                        </select>
+                    </div>
+                    
                     <input value={zone} onChange={e => setZone(e.target.value)} placeholder="Zone (Optional)" />
                     
                     <div style={{display:'flex', gap:'10px'}}>
                         <div style={{flex:1}}>
                             <label style={{fontSize:'0.85rem', fontWeight:'bold'}}>Weight (kg)</label>
-                            <input type="number" value={weight} onChange={e => setWeight(Number(e.target.value))} />
+                            <input type="number" value={weight} onChange={e => setWeight(Number(e.target.value))} min="0.1" step="0.1" />
                         </div>
                         <div style={{flex:1}}>
-                            <label style={{fontSize:'0.85rem', fontWeight:'bold'}}>Deadline (mins)</label>
-                            <input type="number" value={deadline} onChange={e => setDeadline(Number(e.target.value))} />
+                            <label style={{fontSize:'0.85rem', fontWeight:'bold'}}>Package Size</label>
+                            <select value={size} onChange={e => setSize(e.target.value)} style={{width:'100%', padding:'8px'}}>
+                                <option value="small">Small (Bike)</option>
+                                <option value="medium">Medium (Truck)</option>
+                                <option value="large">Large (Heavy Truck)</option>
+                            </select>
                         </div>
+                    </div>
+                    
+                    <div style={{flex:1}}>
+                        <label style={{fontSize:'0.85rem', fontWeight:'bold'}}>Delivery Deadline (minutes)</label>
+                        <input type="number" value={deadline} onChange={e => setDeadline(Number(e.target.value))} min="30" />
+                    </div>
+                    
+                    <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                        <input type="checkbox" checked={emergency} onChange={e => setEmergency(e.target.checked)} id="emergency" />
+                        <label htmlFor="emergency" style={{fontSize:'0.85rem', fontWeight:'bold'}}>Emergency Delivery (Medicine/Urgent)</label>
                     </div>
                 </div>
 
@@ -211,6 +242,7 @@ function AdminDashboard() {
     const [comparisonData, setComparisonData] = useState(null);
     const [isTrafficMode, setIsTrafficMode] = useState(false); // NEW: Controls the red button
     const [blockages, setBlockages] = useState([]); // NEW: Stores the Red Circles
+    const [showRouteComparison, setShowRouteComparison] = useState(false); // NEW: Toggle for showing both routes
     
     // UI States
     const [isAddingDelivery, setIsAddingDelivery] = useState(false);
@@ -323,9 +355,27 @@ function AdminDashboard() {
     };
 
     // 2. Handle Map Click for Blockage
-    const handleBlockMapClick = (latlng) => {
-        setBlockages([...blockages, latlng]);
-        setNotification({ msg: "Road Blocked! 🛑 Click 'Generate' to reroute.", isError: false });
+    const handleBlockMapClick = async (latlng) => {
+        const newBlockages = [...blockages, latlng];
+        setBlockages(newBlockages);
+        setNotification({ msg: "Road Blocked! 🛑 Auto-generating optimized routes...", isError: false });
+        
+        // Auto-generate routes with new traffic blocks
+        setAppStatus('generating');
+        setComparisonData(null);
+        
+        try {
+            await axios.post(`${BACKEND_URL}/api/schedule`, { 
+                algorithm,
+                blockages: newBlockages.map(b => [b.lat, b.lng]) // Send updated blockages to backend
+            });
+            setNotification({ msg: `Routes optimized around ${newBlockages.length} traffic blocks!`, isError: false });
+            fetchData();
+        } catch (err) { 
+            setNotification({ msg: "Auto-optimization failed. Check AI service.", isError: true }); 
+        } finally { 
+            setAppStatus('ready'); 
+        }
     };
 
     // 3. Comparison Mode
@@ -384,6 +434,12 @@ function AdminDashboard() {
                             {view.charAt(0).toUpperCase() + view.slice(1)}
                         </li>
                     ))}
+                    <li style={{ padding: '15px 20px', borderBottom: '1px solid #34495e', cursor: 'pointer', background: activeView === 'traffic' ? '#e74c3c' : 'transparent' }} onClick={() => setActiveView('traffic')}>
+                        🚧 Traffic Jams
+                    </li>
+                    <li style={{ padding: '15px 20px', borderBottom: '1px solid #34495e', cursor: 'pointer', background: activeView === 'comparison' ? '#9b59b6' : 'transparent' }} onClick={() => setActiveView('comparison')}>
+                        📊 Route Comparison
+                    </li>
                     <li style={{ padding: '15px 20px', borderBottom: '1px solid #34495e', cursor: 'pointer' }} onClick={() => setWarehouseModalOpen(true)}>
                         Warehouse Stats
                     </li>
@@ -404,6 +460,8 @@ function AdminDashboard() {
                     <h2 style={{ margin: 0, color: '#2c3e50' }}>Parcel Distribution Control Center</h2>
                     <div style={{ fontSize: '0.9rem', color: '#555', fontWeight:'bold' }}>
                         🟢 System Online
+                        {appStatus === 'generating' && <span style={{color: '#f39c12', marginLeft: '10px'}}>⚡ AI Optimizing Routes...</span>}
+                        {blockages.length > 0 && <span style={{color: '#e74c3c', marginLeft: '10px'}}>🚧 {blockages.length} Traffic Blocks Active</span>}
                     </div>
                 </header>
 
@@ -429,12 +487,333 @@ function AdminDashboard() {
                         </div>
                     )}
 
+                    {/* VIEW: TRAFFIC JAMS */}
+                    {activeView === 'traffic' && (
+                        <div className="panel">
+                            <h3>🚧 Traffic Jam Management</h3>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+                                <div className="panel" style={{ background: '#fff3cd', border: '1px solid #ffeaa7' }}>
+                                    <h4>Active Traffic Blocks</h4>
+                                    {blockages.length === 0 ? (
+                                        <p style={{ color: '#856404' }}>No traffic jams reported</p>
+                                    ) : (
+                                        <ul style={{ listStyle: 'none', padding: 0 }}>
+                                            {blockages.map((block, idx) => (
+                                                <li key={idx} style={{ padding: '10px', margin: '5px 0', background: 'white', borderRadius: '5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <span>Block #{idx + 1}: {block.lat.toFixed(4)}, {block.lng.toFixed(4)}</span>
+                                                    <button 
+                                                        onClick={() => setBlockages(blockages.filter((_, i) => i !== idx))}
+                                                        style={{ background: '#dc3545', color: 'white', border: 'none', padding: '5px 10px', borderRadius: '3px', cursor: 'pointer' }}
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                    <button 
+                                        onClick={() => setBlockages([])}
+                                        style={{ marginTop: '10px', background: '#dc3545', color: 'white', border: 'none', padding: '10px', width: '100%', borderRadius: '5px' }}
+                                        disabled={blockages.length === 0}
+                                    >
+                                        Clear All Blocks
+                                    </button>
+                                </div>
+                                
+                                <div className="panel" style={{ background: '#d1ecf1', border: '1px solid #bee5eb' }}>
+                                    <h4>Route Impact Analysis</h4>
+                                    {comparisonData ? (
+                                        <div>
+                                            <div style={{ marginBottom: '15px' }}>
+                                                <h5 style={{ color: '#0c5460' }}>Original Route</h5>
+                                                <p>Distance: {comparisonData.algo_2.distance}</p>
+                                                <p>Duration: {comparisonData.algo_2.duration}</p>
+                                                <p>Fuel: {comparisonData.algo_2.fuel}</p>
+                                                <p>EV Energy: {comparisonData.algo_2.ev_energy}</p>
+                                                <p>EV Range: {comparisonData.algo_2.ev_range_used}</p>
+                                            </div>
+                                            <div style={{ marginBottom: '15px' }}>
+                                                <h5 style={{ color: '#0c5460' }}>Optimized Route</h5>
+                                                <p>Distance: {comparisonData.algo_1.distance}</p>
+                                                <p>Duration: {comparisonData.algo_1.duration}</p>
+                                                <p>Fuel: {comparisonData.algo_1.fuel}</p>
+                                                <p>EV Energy: {comparisonData.algo_1.ev_energy}</p>
+                                                <p>EV Range: {comparisonData.algo_1.ev_range_used}</p>
+                                            </div>
+                                            <div style={{ background: '#bee5eb', padding: '10px', borderRadius: '5px' }}>
+                                                <strong>Time Saved: {comparisonData.algo_1.saved}</strong><br/>
+                                                <strong>Energy Saved: {comparisonData.algo_1.ev_energy_saved}</strong><br/>
+                                                <strong>Range Saved: {comparisonData.algo_1.ev_range_saved}</strong>
+                                            </div>
+                                            {comparisonData.summary && (
+                                                <div style={{ marginTop: '10px', fontSize: '0.9rem' }}>
+                                                    <p><strong>Overall Efficiency:</strong></p>
+                                                    <p>Time: {comparisonData.summary.time_efficiency}</p>
+                                                    <p>Distance: {comparisonData.summary.distance_efficiency}</p>
+                                                    <p>EV Energy: {comparisonData.summary.ev_efficiency}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <p style={{ color: '#0c5460' }}>Run comparison to see impact</p>
+                                    )}
+                                </div>
+                                
+                                <div className="panel" style={{ background: '#d4edda', border: '1px solid #c3e6cb' }}>
+                                    <h4>EV Vehicle Impact</h4>
+                                    {comparisonData ? (
+                                        <div>
+                                            <p><strong>Original Range Impact:</strong> {(parseFloat(comparisonData.algo_2.distance.split(' ')[0]) / 300 * 100).toFixed(1)}% of battery</p>
+                                            <p><strong>Optimized Range Impact:</strong> {(parseFloat(comparisonData.algo_1.distance.split(' ')[0]) / 300 * 100).toFixed(1)}% of battery</p>
+                                            <p><strong>Range Saved:</strong> {((parseFloat(comparisonData.algo_2.distance.split(' ')[0]) - parseFloat(comparisonData.algo_1.distance.split(' ')[0])) / 300 * 100).toFixed(1)}% battery</p>
+                                            <div style={{ background: '#c3e6cb', padding: '10px', borderRadius: '5px', marginTop: '10px' }}>
+                                                <strong>⚡ EV Efficiency: +{((parseFloat(comparisonData.algo_2.distance.split(' ')[0]) - parseFloat(comparisonData.algo_1.distance.split(' ')[0])) / parseFloat(comparisonData.algo_2.distance.split(' ')[0]) * 100).toFixed(1)}%</strong>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <p style={{ color: '#155724' }}>Assign deliveries and run comparison</p>
+                                    )}
+                                </div>
+                            </div>
+                            
+                            <div style={{ marginTop: '20px', textAlign: 'center' }}>
+                                <button 
+                                    onClick={() => { setActiveView('map'); setIsTrafficMode(true); }}
+                                    style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '15px 30px', borderRadius: '5px', fontSize: '1.1rem', marginRight: '10px' }}
+                                >
+                                    🚧 Add Traffic Blocks on Map
+                                </button>
+                                <button 
+                                    onClick={handleCompare}
+                                    style={{ background: '#3498db', color: 'white', border: 'none', padding: '15px 30px', borderRadius: '5px', fontSize: '1.1rem' }}
+                                >
+                                    📊 Run Route Comparison
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: ROUTE COMPARISON */}
+                    {activeView === 'comparison' && (
+                        <div>
+                            <h3>📊 Route Comparison Analysis</h3>
+                            {!comparisonData ? (
+                                <div className="panel" style={{ textAlign: 'center', padding: '50px' }}>
+                                    <h4>No Comparison Data Available</h4>
+                                    <p>Assign deliveries and run a comparison to see route optimization results.</p>
+                                    <button 
+                                        onClick={() => setActiveView('map')}
+                                        style={{ background: '#3498db', color: 'white', border: 'none', padding: '15px 30px', borderRadius: '5px', fontSize: '1.1rem', marginRight: '10px' }}
+                                    >
+                                        Go to Map View
+                                    </button>
+                                    <button 
+                                        onClick={handleCompare}
+                                        style={{ background: '#28a745', color: 'white', border: 'none', padding: '15px 30px', borderRadius: '5px', fontSize: '1.1rem' }}
+                                    >
+                                        Run Comparison
+                                    </button>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', gap: '20px', height: '70vh' }}>
+                                    {/* Left Map - Previous Route */}
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                        <h4 style={{ textAlign: 'center', color: '#e74c3c', margin: '0 0 10px 0' }}>Previous Route</h4>
+                                        <div className="map-container" style={{ flex: 1, borderRadius: '8px', overflow: 'hidden', border: '2px solid #e74c3c' }}>
+                                            <MapContainer center={WAREHOUSE_COORDS} zoom={12} style={{ height: '100%' }}>
+                                                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                                                <MapRecenter 
+                                                    center={WAREHOUSE_COORDS} 
+                                                    zoom={12} 
+                                                    bounds={comparisonData && comparisonData.algo_2 && comparisonData.algo_2.polyline ? JSON.parse(comparisonData.algo_2.polyline) : null}
+                                                />
+                                                
+                                                <Marker position={WAREHOUSE_COORDS} icon={warehouseIcon}><Popup>Central Warehouse</Popup></Marker>
+                                                
+                                                {/* Traffic Blockages */}
+                                                {blockages.map((b, idx) => (
+                                                    <Circle key={idx} center={b} pathOptions={{ color: 'red', fillColor: 'red', fillOpacity: 0.5 }} radius={300}>
+                                                        <Popup>⛔ TRAFFIC JAM REPORTED</Popup>
+                                                    </Circle>
+                                                ))}
+                                                
+                                                {/* Deliveries */}
+                                                {deliveries.filter(d => d.status === 'assigned').map(d => (
+                                                    <Marker key={d._id} position={[d.pickupLocation.coordinates[1], d.pickupLocation.coordinates[0]]} icon={createDeliveryIcon(d.status)}>
+                                                        <Popup>
+                                                            <strong>{d.customerName}</strong><br/>
+                                                            Status: {d.status}
+                                                        </Popup>
+                                                    </Marker>
+                                                ))}
+                                                
+                                                {/* Previous Route - Gray */}
+                                                {comparisonData && comparisonData.algo_2 && comparisonData.algo_2.polyline && comparisonData.algo_2.polyline.length > 0 && (
+                                                    <Polyline 
+                                                        positions={JSON.parse(comparisonData.algo_2.polyline)} 
+                                                        color="#6c757d" 
+                                                        weight={4} 
+                                                        opacity={0.7}
+                                                        dashArray="5, 10"
+                                                        interactive={false}
+                                                    >
+                                                        <Popup>
+                                                            Previous Route<br/>
+                                                            Distance: {comparisonData.algo_2.distance}<br/>
+                                                            Time: {comparisonData.algo_2.duration}<br/>
+                                                            Fuel: {comparisonData.algo_2.fuel}
+                                                        </Popup>
+                                                    </Polyline>
+                                                )}
+                                            </MapContainer>
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Right Map - New Optimized Route */}
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                        <h4 style={{ textAlign: 'center', color: '#27ae60', margin: '0 0 10px 0' }}>Optimized Route</h4>
+                                        <div className="map-container" style={{ flex: 1, borderRadius: '8px', overflow: 'hidden', border: '2px solid #27ae60' }}>
+                                            <MapContainer center={WAREHOUSE_COORDS} zoom={12} style={{ height: '100%' }}>
+                                                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                                                <MapRecenter 
+                                                    center={WAREHOUSE_COORDS} 
+                                                    zoom={12} 
+                                                    bounds={comparisonData && comparisonData.algo_1 && comparisonData.algo_1.polyline ? JSON.parse(comparisonData.algo_1.polyline) : null}
+                                                />
+                                                
+                                                <Marker position={WAREHOUSE_COORDS} icon={warehouseIcon}><Popup>Central Warehouse</Popup></Marker>
+                                                
+                                                {/* Traffic Blockages */}
+                                                {blockages.map((b, idx) => (
+                                                    <Circle key={idx} center={b} pathOptions={{ color: 'red', fillColor: 'red', fillOpacity: 0.5 }} radius={300}>
+                                                        <Popup>⛔ TRAFFIC JAM REPORTED</Popup>
+                                                    </Circle>
+                                                ))}
+                                                
+                                                {/* Deliveries */}
+                                                {deliveries.filter(d => d.status === 'assigned').map(d => (
+                                                    <Marker key={d._id} position={[d.pickupLocation.coordinates[1], d.pickupLocation.coordinates[0]]} icon={createDeliveryIcon(d.status)}>
+                                                        <Popup>
+                                                            <strong>{d.customerName}</strong><br/>
+                                                            Status: {d.status}
+                                                        </Popup>
+                                                    </Marker>
+                                                ))}
+                                                
+                                                {/* New Optimized Route - Green */}
+                                                {comparisonData && comparisonData.algo_1 && comparisonData.algo_1.polyline && comparisonData.algo_1.polyline.length > 0 && (
+                                                    <Polyline 
+                                                        positions={JSON.parse(comparisonData.algo_1.polyline)} 
+                                                        color="#27ae60" 
+                                                        weight={5}
+                                                        interactive={false}
+                                                    >
+                                                        <Popup>
+                                                            Optimized Route<br/>
+                                                            Distance: {comparisonData.algo_1.distance}<br/>
+                                                            Time: {comparisonData.algo_1.duration}<br/>
+                                                            Fuel: {comparisonData.algo_1.fuel}
+                                                        </Popup>
+                                                    </Polyline>
+                                                )}
+                                            </MapContainer>
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Comparison Stats */}
+                                    <div style={{ width: '350px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                        <div className="panel" style={{ background: '#f8f9fa' }}>
+                                            <h4>Route Metrics Comparison</h4>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                                <div style={{ textAlign: 'center', padding: '20px', background: 'white', borderRadius: '8px', border: '2px solid #e74c3c' }}>
+                                                    <h5 style={{ color: '#e74c3c', margin: '0 0 15px 0', fontSize: '1.1rem' }}>Previous Route</h5>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                        <div><strong>Distance:</strong> <span style={{fontSize: '1.3rem', color: '#e74c3c'}}>{comparisonData.algo_2.distance}</span></div>
+                                                        <div><strong>Time:</strong> <span style={{fontSize: '1.3rem', color: '#e74c3c'}}>{comparisonData.algo_2.duration}</span></div>
+                                                        <div><strong>Fuel:</strong> <span style={{fontSize: '1.3rem', color: '#e74c3c'}}>{comparisonData.algo_2.fuel}</span></div>
+                                                        <div><strong>EV Energy:</strong> <span style={{fontSize: '1.3rem', color: '#e74c3c'}}>{comparisonData.algo_2.ev_energy}</span></div>
+                                                        <div><strong>EV Range Used:</strong> <span style={{fontSize: '1.3rem', color: '#e74c3c'}}>{comparisonData.algo_2.ev_range_used}</span></div>
+                                                    </div>
+                                                </div>
+                                                <div style={{ textAlign: 'center', padding: '20px', background: 'white', borderRadius: '8px', border: '2px solid #27ae60' }}>
+                                                    <h5 style={{ color: '#27ae60', margin: '0 0 15px 0', fontSize: '1.1rem' }}>Optimized Route</h5>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                        <div><strong>Distance:</strong> <span style={{fontSize: '1.3rem', color: '#27ae60'}}>{comparisonData.algo_1.distance}</span></div>
+                                                        <div><strong>Time:</strong> <span style={{fontSize: '1.3rem', color: '#27ae60'}}>{comparisonData.algo_1.duration}</span></div>
+                                                        <div><strong>Fuel:</strong> <span style={{fontSize: '1.3rem', color: '#27ae60'}}>{comparisonData.algo_1.fuel}</span></div>
+                                                        <div><strong>EV Energy:</strong> <span style={{fontSize: '1.3rem', color: '#27ae60'}}>{comparisonData.algo_1.ev_energy}</span></div>
+                                                        <div><strong>EV Range Used:</strong> <span style={{fontSize: '1.3rem', color: '#27ae60'}}>{comparisonData.algo_1.ev_range_used}</span></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div style={{ marginTop: '20px', padding: '15px', background: '#e8f5e8', borderRadius: '8px', textAlign: 'center', border: '2px solid #27ae60' }}>
+                                                <h5 style={{ color: '#27ae60', margin: '0 0 10px 0' }}>🚀 Improvements</h5>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    <div><strong>Time Saved:</strong> <span style={{fontSize: '1.4rem', color: '#27ae60'}}>{comparisonData.algo_1.saved}</span></div>
+                                                    <div><strong>Energy Saved:</strong> <span style={{fontSize: '1.4rem', color: '#27ae60'}}>{comparisonData.algo_1.ev_energy_saved}</span></div>
+                                                    <div><strong>Range Saved:</strong> <span style={{fontSize: '1.4rem', color: '#27ae60'}}>{comparisonData.algo_1.ev_range_saved}</span></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="panel" style={{ background: '#e8f4fd' }}>
+                                            <h4>🚗 EV Vehicle Analysis</h4>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span>Original Energy:</span>
+                                                    <span>{comparisonData.algo_2.ev_energy}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span>Optimized Energy:</span>
+                                                    <span>{comparisonData.algo_1.ev_energy}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span>Original Range Used:</span>
+                                                    <span>{comparisonData.algo_2.ev_range_used}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span>Optimized Range Used:</span>
+                                                    <span>{comparisonData.algo_1.ev_range_used}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', color: '#27ae60' }}>
+                                                    <span>Energy Saved:</span>
+                                                    <span>{comparisonData.algo_1.ev_energy_saved}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', color: '#27ae60' }}>
+                                                    <span>Range Saved:</span>
+                                                    <span>{comparisonData.algo_1.ev_range_saved}</span>
+                                                </div>
+                                                <div style={{ marginTop: '10px', padding: '8px', background: '#c8e6c9', borderRadius: '3px', textAlign: 'center' }}>
+                                                    <strong>⚡ EV Efficiency: {comparisonData.summary?.ev_efficiency || 'N/A'}</strong>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="panel" style={{ background: '#fff3cd' }}>
+                                            <h4>📍 Route Details</h4>
+                                            <p><strong>Traffic Blocks:</strong> {blockages.length}</p>
+                                            <p><strong>Deliveries:</strong> {deliveries.filter(d => d.status === 'assigned').length}</p>
+                                            <p><strong>Active Drivers:</strong> {drivers.filter(d => !d.isAvailable).length}</p>
+                                            <button 
+                                                onClick={handleGenerateSchedule}
+                                                style={{ marginTop: '15px', width: '100%', background: '#28a745', color: 'white', border: 'none', padding: '12px', borderRadius: '5px' }}
+                                                disabled={appStatus !== 'ready'}
+                                            >
+                                                {appStatus === 'generating' ? 'Optimizing...' : 'Apply Optimized Routes'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* VIEW: DELIVERIES */}
                     {activeView === 'deliveries' && (
                         <div className="panel">
                             <h3>Master Delivery Manifest</h3>
                             <table className="history-table">
-                                <thead><tr><th>Customer</th><th>Zone</th><th>Weight</th><th>Deadline</th><th>Status</th><th>Driver</th><th>Action</th></tr></thead>
+                                <thead><tr><th>Customer</th><th>Area</th><th>Emergency</th><th>Zone</th><th>Weight</th><th>Size</th><th>Deadline</th><th>Status</th><th>Driver</th><th>Action</th></tr></thead>
                                 <tbody>
                                     {deliveries.map(d => (
                                         <tr key={d._id}>
@@ -442,8 +821,27 @@ function AdminDashboard() {
                                                 <strong>{d.customerName}</strong><br/>
                                                 <span style={{fontSize:'0.8rem', color:'#777'}}>{d.customerPhone}</span>
                                             </td>
+                                            <td>{d.area || 'N/A'}</td>
+                                            <td>
+                                                {d.emergency ? (
+                                                    <span style={{color: '#e74c3c', fontWeight: 'bold'}}>🚨 EMERGENCY</span>
+                                                ) : (
+                                                    <span style={{color: '#27ae60'}}>Normal</span>
+                                                )}
+                                            </td>
                                             <td>{d.zone}</td>
                                             <td>{d.weight || 5} kg</td>
+                                            <td>
+                                                <span style={{
+                                                    background: d.size === 'small' ? '#27ae60' : d.size === 'medium' ? '#f39c12' : '#e74c3c',
+                                                    color: 'white',
+                                                    padding: '2px 6px',
+                                                    borderRadius: '3px',
+                                                    fontSize: '0.8rem'
+                                                }}>
+                                                    {(d.size && typeof d.size === 'string') ? d.size.toUpperCase() : 'MEDIUM'}
+                                                </span>
+                                            </td>
                                             <td>{d.deadline || 480} min</td>
                                             <td><span className={`badge ${d.status}`}>{d.status.toUpperCase()}</span></td>
                                             <td>{d.assignedDriver ? d.assignedDriver.name : "Unassigned"}</td>
@@ -538,6 +936,12 @@ function AdminDashboard() {
                                             style={{ background: '#8e44ad', width: '100%' }}>
                                             ⚖ Compare: Google vs AI
                                         </button>
+
+                                        <button 
+                                            onClick={() => setShowRouteComparison(!showRouteComparison)}
+                                            style={{ background: showRouteComparison ? '#e67e22' : '#f1c40f', width: '100%', marginTop: '10px' }}>
+                                            {showRouteComparison ? '🔄 Hide Route Comparison' : '👁 Show Route Comparison'}
+                                        </button>
                                     </div>
                                 )}
 
@@ -571,7 +975,12 @@ function AdminDashboard() {
                             <div className="map-container" style={{ flex: 1, borderRadius: '8px', overflow: 'hidden', border: '1px solid #ccc', position:'relative' }}>
                                 <MapContainer center={mapCenter} zoom={12} style={{ height: '100%' }}>
                                     <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                                    <MapRecenter center={mapCenter} zoom={selectedDriver ? 14 : 12} />
+                                    <MapRecenter 
+                                        center={mapCenter} 
+                                        zoom={selectedDriver ? 14 : 12} 
+                                        bounds={comparisonData && !showRouteComparison && comparisonData.algo_1 && comparisonData.algo_1.polyline ? 
+                                            [...JSON.parse(comparisonData.algo_1.polyline), ...(comparisonData.algo_2.polyline ? JSON.parse(comparisonData.algo_2.polyline) : [])] : null}
+                                    />
                                     
                                     {/* CLICK HANDLER: Handles Blocks or Deliveries */}
                                     <MapClickHandler 
@@ -616,32 +1025,97 @@ function AdminDashboard() {
                                     ))}
 
                                     {/* Routes (Standard) */}
-                                    {!comparisonData && filteredRoutes.map(r => r.polyline && (
+                                    {!comparisonData && blockages.length === 0 && !showRouteComparison && filteredRoutes.map(r => r.polyline && (
                                         <Polyline 
                                             key={r._id} 
-                                            positions={polyline.decode(r.polyline)} 
+                                            positions={JSON.parse(r.polyline)} 
                                             color={selectedDriver ? "#e74c3c" : "#0d6efd"} 
-                                            weight={selectedDriver ? 6 : 4} 
+                                            weight={selectedDriver ? 6 : 4}
+                                            interactive={false}
                                         />
                                     ))}
 
+                                    {/* Manual Route Comparison Mode */}
+                                    {showRouteComparison && !comparisonData && (
+                                        <>
+                                            {/* Show all routes in blue (current) */}
+                                            {filteredRoutes.map(r => r.polyline && (
+                                                <Polyline 
+                                                    key={`current-${r._id}`} 
+                                                    positions={JSON.parse(r.polyline)} 
+                                                    color="#0d6efd" 
+                                                    weight={5}
+                                                    interactive={false}
+                                                >
+                                                    <Popup>Current Route</Popup>
+                                                </Polyline>
+                                            ))}
+                                            {/* If we have comparison data, show optimized in green */}
+                                            {comparisonData && (
+                                                <Polyline 
+                                                    positions={JSON.parse(comparisonData.algo_1.polyline)} 
+                                                    color="#27ae60" 
+                                                    weight={4}
+                                                    dashArray="10, 10"
+                                                    interactive={false}
+                                                >
+                                                    <Popup>Optimized Route</Popup>
+                                                </Polyline>
+                                            )}
+                                        </>
+                                    )}
+
+                                    {/* Routes with Traffic Blocks - Show Comparison */}
+                                    {blockages.length > 0 && !comparisonData && !showRouteComparison && (
+                                        <>
+                                            {/* Show original routes in gray/dashed */}
+                                            {filteredRoutes.map(r => r.polyline && (
+                                                <Polyline 
+                                                    key={`original-${r._id}`} 
+                                                    positions={JSON.parse(r.polyline)} 
+                                                    color="#6c757d" 
+                                                    weight={3}
+                                                    opacity={0.5}
+                                                    dashArray="5, 10"
+                                                    interactive={false}
+                                                >
+                                                    <Popup>Original Route (before traffic)</Popup>
+                                                </Polyline>
+                                            ))}
+                                            {/* Show optimized routes in green */}
+                                            {filteredRoutes.map(r => r.polyline && (
+                                                <Polyline 
+                                                    key={`optimized-${r._id}`} 
+                                                    positions={JSON.parse(r.polyline)} 
+                                                    color="#27ae60" 
+                                                    weight={5}
+                                                    interactive={false}
+                                                >
+                                                    <Popup>Optimized Route (traffic-aware)</Popup>
+                                                </Polyline>
+                                            ))}
+                                        </>
+                                    )}
+
                                     {/* Routes (Comparison Mode) */}
-                                    {comparisonData && (
+                                    {comparisonData && !showRouteComparison && (
                                         <>
                                             <Polyline 
-                                                positions={polyline.decode(comparisonData.algo_1.polyline)} 
+                                                positions={comparisonData.algo_1.polyline} 
                                                 color={comparisonData.algo_1.color} 
                                                 weight={5} 
                                                 opacity={0.6}
-                                                dashArray="10, 10" 
+                                                dashArray="10, 10"
+                                                interactive={false}
                                             >
                                                 <Popup>Strategy: {comparisonData.algo_1.name}</Popup>
                                             </Polyline>
                                             
                                             <Polyline 
-                                                positions={polyline.decode(comparisonData.algo_2.polyline)} 
+                                                positions={JSON.parse(comparisonData.algo_2.polyline)} 
                                                 color={comparisonData.algo_2.color} 
-                                                weight={6} 
+                                                weight={6}
+                                                interactive={false}
                                             >
                                                 <Popup>Strategy: {comparisonData.algo_2.name}</Popup>
                                             </Polyline>
