@@ -31,7 +31,7 @@ const Login = () => {
             } else if (user.role === 'driver') {
                 navigate(`/driver/${user.id}`);
             } else {
-                navigate('/track');
+                navigate('/customer');
             }
 
         } catch (err) {
@@ -44,7 +44,11 @@ const Login = () => {
     return (
         <div className="auth-container">
             <div className="auth-card">
-                <h2>Log In</h2>
+                <div className="auth-card-logo">
+                    <span>📦</span>
+                </div>
+                <h2>Welcome Back</h2>
+                <p className="auth-card-tagline">Parcel Distribution Control System</p>
                 <div className="auth-tabs">
                     <button className={`auth-tab ${role === 'customer' ? 'active' : ''}`} onClick={() => setRole('customer')}>Customer</button>
                     <button className={`auth-tab ${role === 'driver' ? 'active' : ''}`} onClick={() => setRole('driver')}>Driver</button>
@@ -53,18 +57,51 @@ const Login = () => {
                 <form onSubmit={handleLogin}>
                     <div className="form-group">
                         <label>Email Address</label>
-                        <input type="email" value={email} onChange={e => setEmail(e.target.value)} required />
+                        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required />
                     </div>
                     <div className="form-group">
                         <label>Password</label>
-                        <input type="password" value={password} onChange={e => setPassword(e.target.value)} required />
+                        <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
                     </div>
-                    {error && <p style={{color: 'red', textAlign: 'center', fontSize:'0.9rem'}}>{error}</p>}
-                    <button type="submit" className="btn-main btn-primary" style={{width: '100%'}}>
-                        Login as {role.charAt(0).toUpperCase() + role.slice(1)}
+                    {error && (
+                        <div style={{
+                            background: 'rgba(239,68,68,0.15)',
+                            border: '1px solid rgba(239,68,68,0.4)',
+                            borderRadius: '8px',
+                            padding: '10px 14px',
+                            color: '#fca5a5',
+                            fontSize: '0.88rem',
+                            marginBottom: '12px',
+                            textAlign: 'center'
+                        }}>
+                            {error}
+                        </div>
+                    )}
+                    <button type="submit" style={{
+                        width: '100%',
+                        padding: '13px',
+                        background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '10px',
+                        fontSize: '1rem',
+                        fontWeight: '700',
+                        cursor: 'pointer',
+                        transition: 'all 0.25s ease',
+                        boxShadow: '0 6px 20px rgba(99,102,241,0.4)',
+                        letterSpacing: '0.3px'
+                    }}
+                        onMouseEnter={e => e.target.style.transform = 'translateY(-2px)'}
+                        onMouseLeave={e => e.target.style.transform = 'translateY(0)'}
+                    >
+                        Sign In as {role.charAt(0).toUpperCase() + role.slice(1)}
                     </button>
                 </form>
             </div>
+            <p style={{textAlign:'center',marginTop:20,fontSize:'0.85rem',color:'rgba(255,255,255,0.45)',position:'relative',zIndex:1}}>
+                New customer?{' '}
+                <a href="/customer-login" style={{color:'#818cf8',fontWeight:600,textDecoration:'none'}}>Create an account →</a>
+            </p>
         </div>
     );
 };

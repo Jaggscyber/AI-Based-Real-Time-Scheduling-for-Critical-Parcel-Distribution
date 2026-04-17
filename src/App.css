@@ -113,6 +113,13 @@ button {
   transition: background-color 0.2s;
 }
 
+select,
+input {
+  background-color: #fff;
+  color: #1f2937;
+  border: 1px solid #ced4da;
+}
+
 button:hover {
   background-color: #0056b3;
 }
@@ -251,6 +258,8 @@ button:disabled {
 
 .modal-content.wide {
     width: 800px;
+  max-height: 85vh;
+  overflow: hidden;
 }
 
 .close-modal-btn {
@@ -294,6 +303,7 @@ button:disabled {
 }
 
 .history-modal-content { max-height: 400px; overflow-y: auto; }
+.warehouse-tab-content { max-height: 55vh; overflow-y: auto; }
 .history-table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
 .history-table th, .history-table td { border-bottom: 1px solid #ddd; padding: 8px 12px; text-align: left; }
 .history-table th { background-color: var(--light-grey); position: sticky; top: 0; }
@@ -360,3 +370,29 @@ button:disabled {
 }
 .popup-delete-btn:hover { background-color: #c82333; }
 
+/* --- Pulse animation for ORS loading badge --- */
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.25); }
+}
+
+/* --- fadeIn for schedule panel items --- */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* --- Delivery status badge colors --- */
+.badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: white;
+}
+.badge.delivered  { background: #27ae60; }
+.badge.assigned   { background: #3498db; }
+.badge.in_transit { background: #f39c12; }
+.badge.pending    { background: #95a5a6; }
+.badge.failed     { background: #e74c3c; }

@@ -6,6 +6,8 @@ import DriverApply from './DriverApply';
 import AdminDashboard from './AdminDashboard';
 import DriverDashboard from './DriverDashboard';
 import CustomerDashboard from './CustomerDashboard';
+import CustomerAuth from './CustomerAuth';
+import CustomerPortal from './CustomerPortal';
 import './App.css';
 
 function App() {
@@ -16,9 +18,13 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/apply-driver" element={<DriverApply />} />
-        
+
+        {/* Customer Auth */}
+        <Route path="/customer-login" element={<CustomerAuth />} />
+
         {/* Customer Routes */}
-        <Route path="/track" element={<CustomerDashboard />} />
+        <Route path="/customer" element={<CustomerPortal />} />
+        <Route path="/track" element={<CustomerDashboard />} />       {/* public tracking (no login) */}
         <Route path="/my-packages" element={<CustomerDashboard />} />
 
         {/* Protected/Private Routes */}
