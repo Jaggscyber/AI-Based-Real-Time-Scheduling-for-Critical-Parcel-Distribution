@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getWarehouseDetails } = require('../controllers/dashboardController');
+const { getWarehouseDetails, getDriverPerformance, checkSLABreaches } = require('../controllers/dashboardController');
 
-// The only route in this file should be to GET details
 router.get('/details', getWarehouseDetails);
+router.get('/driver-performance', getDriverPerformance);
+router.get('/sla-breaches', checkSLABreaches);
 
 module.exports = router;

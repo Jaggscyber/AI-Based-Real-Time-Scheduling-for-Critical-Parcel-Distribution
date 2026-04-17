@@ -23,10 +23,40 @@ mongoose.connect(MONGO_URI)
     .catch(err => console.error('MongoDB Connection Error:', err));
 
 // --- 3. SOCKET.IO ---
+// --- 3. SOCKET.IO ---
 const io = new Server(server, {
-    cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] }
+  cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] }
 });
+
 app.set('socketio', io);
+
+// NEW: bridge driver GPS → REST (fuel + location)
+io.on('connection', (socket) => {
+  console.log('Driver connected:', socket.id);
+
+  socket.on('updateDriverLocation', async (data) => {
+    try {
+      const { driverId, location } = data;
+      if (!driverId || !location || !location.coordinates) return;
+
+      const [lng, lat] = location.coordinates;
+
+      // Call our REST controller to update DB + fuel + alerts
+      await fetch(`http://localhost:5000/api/drivers/${driverId}/update-location`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat, lng })
+      });
+    } catch (err) {
+      console.error('GPS bridge error:', err.message);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Driver disconnected:', socket.id);
+  });
+});
+
 
 // --- 4. ROUTES ---
 //ALL ROUTES ARE NOW ACTIVE
@@ -36,6 +66,9 @@ app.use('/api/deliveries', require('./routes/deliveryRoutes'));
 app.use('/api/routes', require('./routes/routesRoutes')); // <-- UNCOMMENTED THIS
 app.use('/api/schedule', require('./routes/scheduleRoutes'));
 app.use('/api/dashboard', require('./routes/dashboardRoutes'));
+app.use('/api/fuel', require('./routes/utilsRoutes'));
+app.use('/api/traffic', require('./routes/utilsRoutes'));
+app.use('/api/breakdown', require('./routes/utilsRoutes'));
 
 // --- 5. START SERVER ---
 const PORT = 5000; // Matches your AdminDashboard.js

@@ -4,9 +4,13 @@ const {
     createDelivery,
     getAllDeliveries,
     updateDeliveryStatus,
-    getDeliveryHistory, 
+    getDeliveryHistory,
     deleteDelivery,
-    trackOrder // <--- Import this new function
+    trackOrder,
+    simulateBatchDeliveries,
+    generateOTP,
+    verifyOTP,
+    getMyOrders
 } = require('../controllers/deliveryController');
 
 router.post('/', createDelivery);
@@ -15,7 +19,17 @@ router.put('/:deliveryId/status', updateDeliveryStatus);
 router.delete('/:deliveryId', deleteDelivery);
 router.get('/history', getDeliveryHistory);
 
-// NEW TRACKING ROUTE
+// Customer: fetch my orders by phone number
+router.get('/my-orders', getMyOrders);
+
+// Tracking route
 router.get('/track/:trackingId', trackOrder);
+
+// Warehouse demo
+router.post('/simulate-batch', simulateBatchDeliveries);
+
+// OTP verification
+router.post('/:deliveryId/generate-otp', generateOTP);
+router.post('/:deliveryId/verify-otp', verifyOTP);
 
 module.exports = router;
