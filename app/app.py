@@ -1,15 +1,19 @@
 import os
-# Fix for Windows Joblib error
+
 os.environ['LOKY_MAX_CPU_COUNT'] = '1' 
 
 from dotenv import load_dotenv
-import googlemaps
+import openrouteservice
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import numpy as np
 from sklearn.cluster import KMeans
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from math import radians, cos, sin, asin, sqrt
 import json
+import urllib.request
+import urllib.error
 
 # Try importing Genetic Scheduler
 try:
@@ -25,8 +29,8 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIG ---
-API_key = os.environ.get("GOOGLE_MAPS_API_KEY")
-gmaps = googlemaps.Client(key=API_key) if API_key and len(API_key) > 10 else None
+API_key = os.environ.get("ORS_API_KEY")
+ors_client = openrouteservice.Client(key=API_key) if API_key and len(API_key) > 10 else None
 
 # --- UTILS ---
 
@@ -39,26 +43,6 @@ def haversine(lon1, lat1, lon2, lat2):
     c = 2 * asin(sqrt(a)) 
     r = 6371 # Radius of earth in km
     return c * r
-
-def decode_polyline(polyline_str):
-    index, lat, lng = 0, 0, 0
-    coordinates = []
-    changes = {'latitude': 0, 'longitude': 0}
-    while index < len(polyline_str):
-        for unit in ['latitude', 'longitude']:
-            shift, result = 0, 0
-            while True:
-                byte = ord(polyline_str[index]) - 63
-                index += 1
-                result |= (byte & 0x1f) << shift
-                shift += 5
-                if byte < 0x20: break
-            if (result & 1): changes[unit] = ~(result >> 1)
-            else: changes[unit] = (result >> 1)
-        lat += changes['latitude']
-        lng += changes['longitude']
-        coordinates.append([lat / 100000.0, lng / 100000.0])
-    return coordinates
 
 def solve_tsp_nearest_neighbor(matrix, start_index=0):
     n = len(matrix)
@@ -81,22 +65,28 @@ def solve_tsp_nearest_neighbor(matrix, start_index=0):
     return path
 
 def get_distance_matrix(locations, blockages=None):
-    # 1. TRY GOOGLE API
-    if gmaps:
+    # 1. TRY OPENROUTESERVICE API
+    if ors_client:
         try:
             n = len(locations)
             matrix = np.zeros((n, n))
-            CHUNK_SIZE = 10
-            for i in range(0, n, CHUNK_SIZE):
-                for j in range(0, n, CHUNK_SIZE):
-                    origins = locations[i : i + CHUNK_SIZE]
-                    dests = locations[j : j + CHUNK_SIZE]
-                    resp = gmaps.distance_matrix(origins, dests, mode="driving")
-                    for r_idx, row in enumerate(resp['rows']):
-                        for c_idx, element in enumerate(row['elements']):
-                            val = element['duration']['value'] if element['status'] == 'OK' else 99999
-                            matrix[i + r_idx][j + c_idx] = val
             
+            # ORS requires [Longitude, Latitude] format
+            ors_locations = [[loc[1], loc[0]] for loc in locations]
+            
+            resp = ors_client.distance_matrix(
+                locations=ors_locations,
+                profile='driving-car',
+                metrics=['duration']
+            )
+            
+            durations = resp['durations']
+            
+            for i in range(n):
+                for j in range(n):
+                    val = durations[i][j]
+                    matrix[i][j] = val if val is not None else 99999
+
             # Apply Traffic Penalties
             if blockages:
                 loc_coords = np.array([(l[0], l[1]) for l in locations])
@@ -109,23 +99,35 @@ def get_distance_matrix(locations, blockages=None):
                         matrix[idx, :] *= 5.0
             return matrix
         except Exception as e:
-            print(f"⚠️ Google Matrix API failed: {e}. Switching to fallback.")
+            print(f"⚠️ ORS Matrix API failed: {e}. Switching to fallback.")
 
     # 2. FALLBACK MATRIX (Math Only)
     print("⚠️ Using Euclidean Fallback Matrix")
     locs_array = np.array(locations)
     n = len(locations)
     matrix = np.zeros((n, n))
+    BLOCKED_COST_MULTIPLIER = 50.0   # very strong penalty
+    BLOCK_RADIUS_KM = 1.0            # edges within 1km of a block
+
     for i in range(n):
         for j in range(n):
-            dist_km = haversine(locs_array[i][1], locs_array[i][0], locs_array[j][1], locs_array[j][0])
-            matrix[i][j] = dist_km * 180 # Estimate 3 min per km
-            
+            dist_km = haversine(
+                locs_array[i][1], locs_array[i][0],
+                locs_array[j][1], locs_array[j][0]
+            )
+            base_cost = dist_km * 180  # 3 min per km
+
+            # Apply strong penalty if this edge is near any block (either endpoint)
             if blockages:
                 for block in blockages:
-                    b_dist = haversine(locs_array[j][1], locs_array[j][0], block[1], block[0])
-                    if b_dist < 1.0: 
-                        matrix[i][j] *= 5.0
+                    b_dist_i = haversine(locs_array[i][1], locs_array[i][0], block[1], block[0])
+                    b_dist_j = haversine(locs_array[j][1], locs_array[j][0], block[1], block[0])
+                    if b_dist_i < BLOCK_RADIUS_KM or b_dist_j < BLOCK_RADIUS_KM:
+                        base_cost *= BLOCKED_COST_MULTIPLIER
+                        break
+
+            matrix[i][j] = base_cost
+
     return matrix
 
 def get_seamless_route(start_coord, stops):
@@ -136,34 +138,65 @@ def get_seamless_route(start_coord, stops):
     # Ensure all coordinates are clean lists [Lat, Lng]
     all_coords = [start_coord] + [[s['pickupLocation']['coordinates'][1], s['pickupLocation']['coordinates'][0]] for s in stops]
     
-    # 1. TRY GOOGLE DIRECTIONS
-    if gmaps:
+    # 1. TRY OPENROUTESERVICE DIRECTIONS
+    if ors_client:
         try:
-            google_coords = [(c[0], c[1]) for c in all_coords]
-            MAX_WAYPOINTS = 23
+            # ORS requires [Longitude, Latitude] format
+            ors_coords = [[c[1], c[0]] for c in all_coords]
+            
+            MAX_WAYPOINTS = 40  # Safely under ORS limits
             current_idx = 0
-            while current_idx < len(google_coords) - 1:
-                chunk_end = min(current_idx + MAX_WAYPOINTS + 1, len(google_coords) - 1)
-                origin = google_coords[current_idx]
-                dest = google_coords[chunk_end]
-                waypoints = google_coords[current_idx+1 : chunk_end]
+            
+            while current_idx < len(ors_coords) - 1:
+                chunk_end = min(current_idx + MAX_WAYPOINTS, len(ors_coords) - 1)
+                chunk_coords = ors_coords[current_idx : chunk_end + 1]
                 
-                res = gmaps.directions(origin, dest, waypoints=waypoints, mode="driving")
-                if res:
-                    route = res[0]
-                    decoded = decode_polyline(route['overview_polyline']['points'])
-                    final_coordinates.extend(decoded)
-                    for leg in route['legs']:
-                        total_dist_val += leg['distance']['value']
-                        total_dur_val += leg['duration']['value']
+                res = ors_client.directions(
+                    coordinates=chunk_coords,
+                    profile='driving-car',
+                    format='geojson'
+                )
+                
+                if res and 'features' in res:
+                    route_coords = res['features'][0]['geometry']['coordinates']
+                    
+                    # Flip coordinates back to [Lat, Lng] for the frontend map
+                    # If not the last chunk, drop the last point so it doesn't overlap the next chunk's start
+                    if chunk_end < len(ors_coords) - 1:
+                        final_coordinates.extend([[c[1], c[0]] for c in route_coords[:-1]])
+                    else:
+                        final_coordinates.extend([[c[1], c[0]] for c in route_coords])
+                    
+                    summary = res['features'][0]['properties']['summary']
+                    total_dist_val += summary['distance']
+                    total_dur_val += summary['duration']
+                    
                 current_idx = chunk_end
             
             encoded_polyline = json.dumps(final_coordinates)
             return encoded_polyline, f"{total_dist_val/1000:.1f} km", f"{total_dur_val/60:.0f} min", total_dur_val
         except Exception as e:
-            print(f"⚠️ Google Directions failed: {e}. Using Straight Lines.")
+            print(f"⚠️ ORS Directions failed: {e}. Using Straight Lines.")
 
-    # 2. FALLBACK: STRAIGHT LINES
+    # 2. Try OSRM before falling back to straight lines
+    try:
+        osrm_coords = ';'.join([f"{c[1]},{c[0]}" for c in all_coords])
+        osrm_url = f"https://routing.openstreetmap.de/routed-car/route/v1/driving/{osrm_coords}?overview=full&geometries=geojson"
+        with urllib.request.urlopen(osrm_url, timeout=12) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+
+        if payload.get('code') == 'Ok' and payload.get('routes'):
+            route = payload['routes'][0]
+            route_coords = route['geometry']['coordinates']
+            final_coordinates = [[lat, lng] for lng, lat in route_coords]
+            total_dist_val = route['distance']
+            total_dur_val = route['duration']
+            encoded_polyline = json.dumps(final_coordinates)
+            return encoded_polyline, f"{total_dist_val/1000:.1f} km", f"{total_dur_val/60:.0f} min", total_dur_val
+    except Exception as e:
+        print(f"⚠️ OSRM fallback failed: {e}. Using straight lines.")
+
+    # 3. FALLBACK: STRAIGHT LINES
     print("⚠️ Generating Straight Line Route")
     for i in range(len(all_coords) - 1):
         # Ensure float
@@ -327,15 +360,17 @@ def schedule_deliveries():
             routes[route_key]['stops'].append(delivery)
             driver_index += 1
         
-        print(f"Created {len(routes)} routes")
-        
-        # Now optimize each route
-        for route_key, route_data in routes.items():
+        print(f"Created {len(routes)} zones – optimizing in PARALLEL ⚡")
+        t_start = time.time()
+
+        # ── PARALLEL ZONE OPTIMIZATION ─────────────────────────────────────────
+        def optimize_zone(route_key, route_data):
+            """Runs distance-matrix + GA/TSP + OSRM for one driver zone in its own thread."""
             driver = route_data['driver']
             stops = route_data['stops']
             
             if not stops:
-                continue
+                return route_key, route_data
                 
             # Extract coordinates
             d_raw = driver['currentLocation']['coordinates']
@@ -355,7 +390,7 @@ def schedule_deliveries():
                     best_indices = scheduler.solve()
                     optimized_stops = [stops[i] for i in best_indices]
                 except Exception as e:
-                    print(f"Genetic algorithm failed: {e}, using nearest neighbor")
+                    print(f"[Zone {route_key}] Genetic failed: {e}, using nearest neighbor")
                     path = solve_tsp_nearest_neighbor(matrix, 0)
                     optimized_stops = [stops[x-1] for x in path if x != 0]
             else:
@@ -365,20 +400,85 @@ def schedule_deliveries():
             # Get route polyline
             coords, dist, dur, raw_dur = get_seamless_route(driver_loc, optimized_stops)
             
-            # Update route data
-            route_data['stops'] = optimized_stops
-            route_data['polyline'] = coords
-            route_data['total_distance'] = dist
-            route_data['total_duration'] = dur
-            route_data['legs'] = []  # Could be populated with leg details if needed
-        
-        print(f"Returning {len(routes)} optimized routes")
-        return jsonify(routes)
+            # Return updated route data
+            updated = dict(route_data)
+            updated['stops'] = optimized_stops
+            updated['polyline'] = coords
+            updated['total_distance'] = dist
+            updated['total_duration'] = dur
+            updated['legs'] = []
+            return route_key, updated
+
+        # Run all zones in parallel threads
+        results = {}
+        # Use min(len(routes), 8) threads — safe upper bound for I/O-bound ORS/OSRM calls
+        max_workers = min(len(routes), 8)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(optimize_zone, k, v): k
+                for k, v in routes.items()
+            }
+            for future in as_completed(future_map):
+                try:
+                    key, data_out = future.result()
+                    results[key] = data_out
+                except Exception as exc:
+                    bad_key = future_map[future]
+                    print(f"[Zone {bad_key}] raised exception: {exc}")
+                    results[bad_key] = routes[bad_key]  # keep unoptimized on failure
+        # ──────────────────────────────────────────────────────────────────────
+
+        elapsed = time.time() - t_start
+        print(f"✅ Parallel optimization complete in {elapsed:.2f}s for {len(results)} zones")
+        return jsonify(results)
     except Exception as e:
         print(f"Error in schedule_deliveries: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500 
+
+
+@app.route('/reoptimize-route', methods=['POST'])
+def reoptimize_route():
+    try:
+        data = request.get_json()
+        route = data.get('route', {})
+        blockages = data.get('blockages', [])
+
+        if not route or not route.get('stops'):
+            return jsonify({"error": "Invalid route data"}), 400
+
+        # Extract locations from route stops
+        driver_loc = [13.0827, 80.2707]  # Default warehouse location
+        stops = route['stops']
+
+        # Get locations for matrix calculation
+        locations = [driver_loc] + [[s['pickupLocation']['coordinates'][1], s['pickupLocation']['coordinates'][0]] for s in stops]
+
+        # Get distance matrix with traffic blocks
+        matrix = get_distance_matrix(locations, blockages)
+
+        # Solve TSP with traffic considerations
+        path = solve_tsp_nearest_neighbor(matrix, 0)
+        optimized_stops = [stops[x-1] for x in path if x != 0]
+
+        # Get new route polyline
+        coords, dist, dur, raw_dur = get_seamless_route(driver_loc, optimized_stops)
+
+        return jsonify({
+            "polyline": coords,
+            "total_distance": dist,
+            "total_duration": dur,
+            "legs": [],
+            "optimized_stops": optimized_stops
+        })
+
+    except Exception as e:
+        print(f"Error in reoptimize_route: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/drivers', methods=['GET']) 
 def get_drivers(): return jsonify([]) 
 
